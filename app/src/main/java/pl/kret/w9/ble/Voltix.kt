@@ -35,6 +35,9 @@ object Voltix {
     const val QUERY_BMS_VOLTAGE = 0x64
     const val QUERY_BMS_INFO = 0x65
     const val QUERY_FIRMWARE = 0x66
+    const val METER1 = 0x20
+    const val METER2 = 0x21
+    const val CURRENT_USER = 0x41
 
     /** Komendy od bindowania/resetu/firmware – NIGDY nie wysyłane (nawet z konsoli). */
     val FORBIDDEN = setOf(0x3A, 0x42, 0x43, 0x91, 0x92, 0x93)
@@ -45,7 +48,7 @@ object Voltix {
         E_BRAKE to "eBrake", CRUISE to "cruise", START_MODE to "startMode", DRIVE_MODE to "driveMode",
         UNIT to "unit", SINGLE_MILE to "singleMile", SMART_LOCK to "smartLock", QUERY_CAR to "queryCar",
         QUERY_SN to "querySN", QUERY_SPEED_LIMIT to "querySpeedLimit", QUERY_LIGHT to "queryLight",
-        QUERY_BMS_VOLTAGE to "queryBmsVoltage", QUERY_BMS_INFO to "queryBmsInfo", QUERY_FIRMWARE to "queryFirmware",
+        QUERY_BMS_VOLTAGE to "queryBmsVoltage", QUERY_BMS_INFO to "queryBmsInfo", QUERY_FIRMWARE to "queryFirmware", METER1 to "meter1", METER2 to "meter2",
     )
 
     fun crc16Modbus(bytes: ByteArray, from: Int = 0, to: Int = bytes.size): Int {
@@ -135,72 +138,149 @@ object Voltix {
 }
 
 data class Telemetry(
+    // ---- Meter1 (0x20) – wysyłane przez hulajnogę automatycznie ----
     val batteryPct: Int = 0,
     val faultCode: Int = 0,
     val speedKmh: Double = 0.0,
-    val lightFlags: Int = 0,
-    val statusFlags: Int = 0,
+    val avgSpeedKmh: Double = 0.0,
+    val rangeKm: Int? = null,
+    val lightFlags: Int = 0,          // bit0 nastrojowe, bit1 prawy kier., bit2 lewy kier., bit3 tył, bit4 przód
+    val statusFlags: Int = 0,         // bit0 niski poziom, bit3 hamulec, bit4 PIN, bit5 blokada, bit6 tempomat aktywny, bit7 ładowanie
     val speedLimitKmh: Int? = null,
+    val speedMode: Int? = null,       // 0 spacer, 1 eko, 2 normalny, 3 sport…
+    val mphUnit: Boolean = false,
+    val dualMotor: Boolean = false,
+    val kersLevel: Int? = null,       // 0 adaptacyjny, 1 słaby, 2 średni, 3 mocny
+    val status3: Int = 0,             // bit5 smart lock, bit6 tempomat włączony, bit7 zero start
+    // ---- Meter2 (0x21) ----
     val voltage: Double? = null,
     val currentA: Double? = null,
-    val tempC: Double? = null,
+    val dischargePower: Double? = null,
+    val tripKm: Double? = null,
+    val odometerKm: Double? = null,
+    val rangeKm2: Int? = null,
+    val avgCurrentA: Double? = null,
+    val gaugeBrightness: Int? = null,
+    val batteryTempC: Int? = null,
+    val motorTempC: Int? = null,
+    val gearsAvailable: Int = 0,      // bit0 spacer, bit1 eko, bit2 normalny, bit3 sport, bit4 sport2, bit5 sport3
+    // ---- odpowiedzi ----
+    val limitMin: Int? = null,
+    val limitMax: Int? = null,
     val serial: String? = null,
     val firmware: String? = null,
+    val cells: Map<Int, Double> = emptyMap(), // nr ogniwa (od 1) -> V
+    val cellCount: Int? = null,
+    val bmsVoltage: Double? = null,
+    val bmsCurrent: Double? = null,
+    val bmsCycles: Int? = null,
+    val bmsFullCap: Int? = null,
+    val bmsRemainCap: Int? = null,
+    val bmsTemps: List<Int> = emptyList(),
+    val rawMeter1: ByteArray = ByteArray(0),
+    val rawMeter2: ByteArray = ByteArray(0),
     val rawBmsVoltage: ByteArray = ByteArray(0),
     val rawBmsInfo: ByteArray = ByteArray(0),
-    val rawQueryCar: ByteArray = ByteArray(0),
     val lastUpdate: Long = 0L,
 ) {
-    val lightOn get() = lightFlags and 0x01 != 0
-    val locked get() = statusFlags and 0x02 != 0      // eksperymentalne
-    val cruiseOn get() = statusFlags and 0x04 != 0    // eksperymentalne
-    val charging get() = statusFlags and 0x08 != 0    // eksperymentalne
+    val headlightOn get() = lightFlags and 0x10 != 0
+    val lightOn get() = headlightOn
+    val rearLightOn get() = lightFlags and 0x08 != 0
+    val lowPower get() = statusFlags and 0x01 != 0
+    val braking get() = statusFlags and 0x08 != 0
+    val lockHasPin get() = statusFlags and 0x10 != 0
+    val locked get() = statusFlags and 0x20 != 0
+    val cruiseActive get() = statusFlags and 0x40 != 0
+    val charging get() = statusFlags and 0x80 != 0
+    val cruiseOn get() = status3 and 0x40 != 0
+    val zeroStart get() = status3 and 0x80 != 0
+    val smartLock get() = status3 and 0x20 != 0
+    val tempC: Double? get() = (motorTempC ?: batteryTempC)?.toDouble()
     val powerW: Double? get() = if (voltage != null && currentA != null) voltage * currentA else null
 
-    fun withQueryCar(p: ByteArray): Telemetry {
-        if (p.size < 5) return copy(rawQueryCar = p, lastUpdate = System.currentTimeMillis())
-        val u = { i: Int -> p[i].toInt() and 0xFF }
-        val high = if (p.size > 8) u(8) and 0x03 else 0
-        val bat = u(3)
-        val lim = if (p.size > 7) u(7) else 0
+    fun cellVoltages(): List<Double> = cells.toSortedMap().values.toList()
+
+    companion object {
+        private fun u8(f: ByteArray, i: Int) = f[i].toInt() and 0xFF
+        /** Little-endian ze znakiem (jak b.a() w Voltix). */
+        private fun s16le(f: ByteArray, i: Int) = ((f[i].toInt() and 0xFF) or (f[i + 1].toInt() shl 8)).toShort().toInt()
+        private fun u16be(f: ByteArray, i: Int) = ((f[i].toInt() and 0xFF) shl 8) or (f[i + 1].toInt() and 0xFF)
+        private fun s16be(f: ByteArray, i: Int) = ((f[i].toInt() shl 8) or (f[i + 1].toInt() and 0xFF)).toShort().toInt()
+    }
+
+    /** Ramka 0x20 (cała ramka, indeksy jak w Voltix BleVModel.bleData). */
+    fun withMeter1(f: ByteArray): Telemetry {
+        if (f.size < 17) return this
+        val b13 = u8(f, 13)
+        val b15 = u8(f, 15)
+        val kers = when ((b15 shr 5) and 0x03) { 1 -> 1; 2 -> 2; 3 -> 3; else -> 0 }
         return copy(
-            lightFlags = u(0),
-            statusFlags = u(1),
-            faultCode = u(2),
-            batteryPct = if (bat <= 100) bat else batteryPct,
-            speedKmh = (u(4) or (high shl 8)) * 0.1,
-            speedLimitKmh = if (lim in 1..79) lim else speedLimitKmh,
-            rawQueryCar = p,
+            lightFlags = u8(f, 5),
+            statusFlags = u8(f, 6),
+            faultCode = u8(f, 7),
+            batteryPct = u8(f, 8).coerceIn(0, 100),
+            speedKmh = (u8(f, 9) or ((b13 and 0x03) shl 8)) * 0.1,
+            avgSpeedKmh = (u8(f, 10) or (((b13 shr 2) and 0x03) shl 8)) * 0.1,
+            rangeKm = u8(f, 11) or (((b13 shr 4) and 0x03) shl 8),
+            speedLimitKmh = u8(f, 12),
+            speedMode = b15 and 0x07,
+            mphUnit = b15 and 0x08 != 0,
+            dualMotor = b15 and 0x10 != 0,
+            kersLevel = kers,
+            status3 = u8(f, 16),
+            rawMeter1 = f,
             lastUpdate = System.currentTimeMillis(),
         )
     }
 
-    /**
-     * Heurystyka: szuka w surowym pakiecie BMS wartości 16-bit LE wyglądających jak napięcia ogniw (2,5–4,35 V w mV).
-     * Producent nie publikuje formatu – wynik trzeba porównać z rzeczywistością.
-     */
-    fun cellVoltages(): List<Double> {
-        for (src in listOf(rawBmsInfo, rawBmsVoltage)) {
-            val cells = ArrayList<Double>()
-            var i = 0
-            while (i + 1 < src.size) {
-                val mv = (src[i].toInt() and 0xFF) or ((src[i + 1].toInt() and 0xFF) shl 8)
-                if (mv in 2500..4350) cells.add(mv / 1000.0)
-                i += 2
-            }
-            if (cells.size >= 4) return cells
-        }
-        return emptyList()
+    /** Ramka 0x21. */
+    fun withMeter2(f: ByteArray): Telemetry {
+        if (f.size < 17) return this
+        return copy(
+            dischargePower = s16le(f, 5) * 0.1,
+            voltage = s16le(f, 7) * 0.01,
+            currentA = s16le(f, 9) * 0.01,
+            tripKm = s16le(f, 11) * 0.1,
+            odometerKm = (s16le(f, 13) and 0xFFFF).toDouble(),
+            rangeKm2 = u8(f, 15),
+            avgCurrentA = u8(f, 16) * 0.1,
+            gaugeBrightness = if (f.size > 17 + 4) u8(f, 17) else gaugeBrightness,
+            batteryTempC = if (f.size > 18 + 4) f[18].toInt() else batteryTempC,
+            motorTempC = if (f.size > 19 + 4) f[19].toInt() else motorTempC,
+            gearsAvailable = if (f.size > 20 + 4) u8(f, 20) else gearsAvailable,
+            rawMeter2 = f,
+            lastUpdate = System.currentTimeMillis(),
+        )
     }
 
-    fun withMeter2(p: ByteArray): Telemetry {
-        fun u16(i: Int): Int? = if (p.size > i + 1) (p[i].toInt() and 0xFF) or ((p[i + 1].toInt() and 0xFF) shl 8) else null
-        val v = u16(2)?.let { it * 0.01 }
+    /** 0x64: [5]=liczba ogniw, [6]=nr pierwszego ogniwa (1,9,17,25), od [7] napięcia BE w mV (max 8). */
+    fun withCells(f: ByteArray): Telemetry {
+        if (f.size < 11) return copy(rawBmsVoltage = f)
+        val total = u8(f, 5)
+        val start = u8(f, 6)
+        if (start < 1) return copy(rawBmsVoltage = f)
+        val n = minOf(8, total - start + 1, (f.size - 4 - 7) / 2)
+        val m = cells.toMutableMap()
+        for (k in 0 until n) {
+            val mv = u16be(f, 7 + k * 2)
+            if (mv in 1000..5000) m[start + k] = mv / 1000.0
+        }
+        return copy(cells = m, cellCount = total, rawBmsVoltage = f)
+    }
+
+    /** 0x65: napięcie, prąd, cykle, pojemności, temperatury. */
+    fun withBmsInfo(f: ByteArray): Telemetry {
+        if (f.size < 19) return copy(rawBmsInfo = f)
+        val tn = u8(f, 15)
+        val temps = (0 until minOf(tn, 6)).mapNotNull { k -> if (16 + k < f.size - 4) f[16 + k].toInt() else null }
         return copy(
-            voltage = if (v != null && v in 20.0..100.0) v else voltage,
-            // prąd jako liczba ze znakiem – ujemny = rekuperacja (ładowanie przy hamowaniu)
-            currentA = u16(4)?.let { (if (it > 32767) it - 65536 else it) * 0.01 } ?: currentA,
-            tempC = if (p.size > 11) (p[11].toInt() and 0xFF) * 0.1 else tempC,
+            bmsVoltage = u16be(f, 5) / 1000.0,
+            bmsCurrent = s16be(f, 7) / 1000.0,
+            bmsCycles = u16be(f, 9),
+            bmsFullCap = u16be(f, 11),
+            bmsRemainCap = u16be(f, 13),
+            bmsTemps = temps,
+            rawBmsInfo = f,
         )
     }
 }

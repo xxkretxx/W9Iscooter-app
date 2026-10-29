@@ -46,7 +46,8 @@ import pl.kret.w9.ble.Voltix
 fun MoreScreen(onKeepScreenChanged: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LargeTitle("Więcej")
             Segmented(listOf("Ustawienia", "Konsola BLE"), tab) { tab = it }
         }
         if (tab == 0) SettingsTab(onKeepScreenChanged) else ConsoleTab()
@@ -61,8 +62,6 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
     var keepOn by remember { mutableStateOf(p.keepScreenOn) }
     var gpsSpeed by remember { mutableStateOf(p.useGpsSpeed) }
     var alarm by remember { mutableFloatStateOf(p.speedAlarmKmh.toFloat()) }
-    var poll by remember { mutableFloatStateOf(p.pollMs.toFloat()) }
-    var lightVal by remember { mutableStateOf(p.lightOnValue.toString()) }
     val name by app.scooter.deviceName.collectAsStateWithLifecycle()
     var bmsPoll by remember { mutableStateOf(p.bmsPoll) }
     var batAlerts by remember { mutableStateOf(p.batteryAlerts) }
@@ -78,9 +77,7 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
         Panel(title = "Połączenie") {
             SwitchRow("Automatyczne łączenie", autoRe, "z ostatnią hulajnogą po starcie / zerwaniu") { autoRe = it; p.autoReconnect = it }
             Text("Zapamiętana: ${name ?: p.lastAddress ?: "brak"}", color = Ui.Muted, fontSize = 13.sp)
-            OutlinedButton(onClick = { app.scooter.forget() }, modifier = Modifier.fillMaxWidth()) { Text("Zapomnij hulajnogę") }
-            Text("Odświeżanie telemetrii: ${poll.toInt()} ms", color = Color.White)
-            Slider(value = poll, onValueChange = { poll = it }, onValueChangeFinished = { p.pollMs = poll.toInt() }, valueRange = 300f..3000f)
+            PillButton("Zapomnij hulajnogę", Modifier.fillMaxWidth(), color = Ui.Card2, textColor = Ui.Danger) { app.scooter.forget() }
         }
 
         Panel(title = "Inteligentne funkcje") {
@@ -89,7 +86,7 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
                 autoLight = it; p.autoLight = it; app.autoLight.update()
             }
             SwitchRow("Alerty baterii", batAlerts, "powiadomienie przy 20%, 10% i 5%") { batAlerts = it; p.batteryAlerts = it }
-            SwitchRow("Odpytuj BMS", bmsPoll, "napięcie/prąd na żywo – potrzebne do wykresów i analizy") { bmsPoll = it; p.bmsPoll = it }
+            SwitchRow("Odpytuj BMS", bmsPoll, "ogniwa, cykle, pojemność – co kilka sekund") { bmsPoll = it; p.bmsPoll = it }
         }
 
         Panel(title = "Serwis (przebieg z tras: ${f0(totalKm)} km)") {
@@ -105,7 +102,10 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
                             color = if (left <= 0) Ui.Warn else Ui.Muted, fontSize = 12.sp,
                         )
                     }
-                    androidx.compose.material3.TextButton(onClick = { p.setServiceDone(item.key, totalKm); svcTick++ }) { Text("Zrobione") }
+                    Text(
+                        "Zrobione", color = Ui.Blue, fontSize = 15.sp,
+                        modifier = Modifier.bounceClick { p.setServiceDone(item.key, totalKm); svcTick++ }.padding(8.dp),
+                    )
                 }
             }
         }
@@ -125,24 +125,10 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
             SwitchRow("Prędkość z GPS", gpsSpeed, "zamiast z hulajnogi (podczas nagrywania trasy)") { gpsSpeed = it; p.useGpsSpeed = it }
         }
 
-        Panel(title = "Zaawansowane") {
-            OutlinedTextField(
-                value = lightVal,
-                onValueChange = { v -> lightVal = v; v.toIntOrNull()?.takeIf { it in 0..255 }?.let { p.lightOnValue = it } },
-                label = { Text("Bajt „światło ON” (domyślnie 1)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "Jeśli światło nie reaguje, sprawdź w konsoli który wariant działa (przyciski „Test światła”) i wpisz tu wartość.",
-                color = Ui.Muted, fontSize = 12.sp,
-            )
-        }
-
         Panel(title = "O aplikacji") {
             Text("W9 Scooter • własny klient BLE dla hulajnóg z aplikacją Voltix (iScooter W9).", color = Color.White)
             Text(
-                "Protokół FF60 na podstawie projektu scooter-ios (MIT, Luke Kimball). Aplikacja nigdy nie wysyła komend " +
+                "Komendy i format danych odtworzone z aplikacji Voltix 1.1.1. Aplikacja nigdy nie wysyła komend " +
                     "bindowania, resetu ani aktualizacji firmware.",
                 color = Ui.Muted, fontSize = 12.sp,
             )
@@ -193,12 +179,12 @@ private fun ConsoleTab() {
             }, modifier = Modifier.weight(1f)) { Text("Kopiuj log") }
             OutlinedButton(onClick = { s.clearLog() }, modifier = Modifier.weight(1f)) { Text("Wyczyść") }
         }
-        Text("Test światła (wysyła wariant, obserwuj hulajnogę):", color = Ui.Muted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(1, 2, 3, 0xFF).forEach { v ->
-                OutlinedButton(onClick = { s.send(Voltix.build(Voltix.LIGHT, 2, v), "test światła [$v]") }, modifier = Modifier.weight(1f)) {
-                    Text("%02X".format(v), fontWeight = FontWeight.Bold)
-                }
+            OutlinedButton(onClick = { s.send(Voltix.query(Voltix.QUERY_BMS_VOLTAGE, 1), "ogniwa") }, modifier = Modifier.weight(1f)) {
+                Text("BMS ogniwa", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = { s.send(Voltix.query(Voltix.QUERY_BMS_INFO, 1), "BMS info") }, modifier = Modifier.weight(1f)) {
+                Text("BMS info", fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
         Text("", Modifier.height(4.dp))

@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.togetherWith
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import pl.kret.w9.App
 import pl.kret.w9.ble.AccelState
@@ -52,13 +53,24 @@ fun AnalysisScreen() {
         onDispose { scooter.fastPoll = false }
     }
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(16.dp)) {
-            Segmented(listOf("Wykresy", "Bateria", "0–25"), tab) { tab = it }
+        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LargeTitle("Analiza")
+            Segmented(listOf("Na żywo", "Bateria", "Przyspieszenie"), tab) { tab = it }
         }
-        when (tab) {
-            0 -> ChartsTab()
-            1 -> BmsTab()
-            else -> AccelTab()
+        androidx.compose.animation.AnimatedContent(
+            targetState = tab,
+            transitionSpec = {
+                val dir = if (targetState > initialState) 1 else -1
+                (androidx.compose.animation.slideInHorizontally { it / 4 * dir } + androidx.compose.animation.fadeIn()) togetherWith
+                    (androidx.compose.animation.slideOutHorizontally { -it / 4 * dir } + androidx.compose.animation.fadeOut())
+            },
+            label = "anTab",
+        ) { tb ->
+            when (tb) {
+                0 -> ChartsTab()
+                1 -> BmsTab()
+                else -> AccelTab()
+            }
         }
     }
 }
@@ -98,7 +110,7 @@ private fun ChartsTab() {
                 Stat("Dystans", "${f1(Ui.dist(st.distanceKm))} ${Ui.distUnit}", Modifier.weight(1f))
                 Stat("V max", "${f0(Ui.speed(st.maxSpeed))} ${Ui.speedUnit}", Modifier.weight(1f))
             }
-            OutlinedButton(onClick = { a.reset() }, modifier = Modifier.fillMaxWidth()) { Text("Resetuj sesję") }
+            PillButton("Resetuj sesję", Modifier.fillMaxWidth(), color = Ui.Card2, textColor = Ui.Danger) { a.reset() }
         }
         Text("", Modifier.height(4.dp))
     }
@@ -174,17 +186,18 @@ private fun BmsTab() {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Panel(title = "Pakiet 48 V (13S)") {
+        val series = t.cellCount?.takeIf { it in 7..30 } ?: Analytics.CELLS_SERIES
+        Panel(title = "Pakiet ${series}S") {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Napięcie", t.voltage?.let { "${f1(it)} V" } ?: "–", Modifier.weight(1f))
-                Stat("Śr. ogniwo", t.voltage?.let { String.format(Locale.US, "%.3f V", it / Analytics.CELLS_SERIES) } ?: "–", Modifier.weight(1f))
-                Stat("Temp.", t.tempC?.let { "${f0(it)} °C" } ?: "–", Modifier.weight(1f), tempColor(t.tempC))
+                Stat("Śr. ogniwo", t.voltage?.let { String.format(Locale.US, "%.3f V", it / series) } ?: "–", Modifier.weight(1f))
+                Stat("Temp.", t.batteryTempC?.let { "$it °C" } ?: "–", Modifier.weight(1f), tempColor(t.batteryTempC?.toDouble()))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Bateria (BMS)", "${t.batteryPct}%", Modifier.weight(1f), batteryColor(t.batteryPct))
                 Stat(
                     "SoC z napięcia",
-                    (st.restVoltage ?: t.voltage)?.let { "${Analytics.socFromVoltage(it)}%" } ?: "–",
+                    (st.restVoltage ?: t.voltage)?.let { "${Analytics.socFromVoltage(it, series)}%" } ?: "–",
                     Modifier.weight(1f),
                 )
                 Stat("Moc", t.powerW?.let { "${f0(it)} W" } ?: "–", Modifier.weight(1f))
@@ -193,6 +206,27 @@ private fun BmsTab() {
                 "SoC z napięcia liczony z krzywej Li-ion – porównanie z wskazaniem BMS pokazuje, czy licznik % nie kłamie.",
                 color = Ui.Muted, fontSize = 11.sp,
             )
+        }
+
+        Panel(title = "Dane z BMS") {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Cykle ładowania", t.bmsCycles?.toString() ?: "–", Modifier.weight(1f))
+                Stat("Pojemność pełna", t.bmsFullCap?.let { "$it mAh" } ?: "–", Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Pozostało", t.bmsRemainCap?.let { "$it mAh" } ?: "–", Modifier.weight(1f))
+                Stat(
+                    "Zdrowie (SoH)",
+                    t.bmsFullCap?.let { fc -> if (fc > 0) "${f0(fc / 14000.0 * 100)}%" else null } ?: "–",
+                    Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("V (BMS)", t.bmsVoltage?.let { "${f1(it)} V" } ?: "–", Modifier.weight(1f))
+                Stat("I (BMS)", t.bmsCurrent?.let { "${f1(it)} A" } ?: "–", Modifier.weight(1f))
+                Stat("Czujniki temp.", if (t.bmsTemps.isEmpty()) "–" else t.bmsTemps.joinToString("/") + "°", Modifier.weight(1f))
+            }
+            Text("SoH = pojemność pełna względem nominalnych 14 Ah baterii W9.", color = Ui.Muted, fontSize = 11.sp)
         }
 
         Panel(title = "Kondycja pakietu") {
@@ -216,8 +250,8 @@ private fun BmsTab() {
         Panel(title = "Ogniwa") {
             if (cells.isEmpty()) {
                 Text(
-                    "Hulajnoga nie przesłała napięć pojedynczych ogniw (lub BMS używa innego formatu). " +
-                        "Surowe dane BMS poniżej – wyślij mi je, a dopiszę dekodowanie.",
+                    "Czekam na napięcia ogniw z BMS (zapytanie co ~3 s). Jeśli nic nie przychodzi, " +
+                        "BMS tej hulajnogi nie udostępnia ogniw przez Bluetooth – surowe dane poniżej.",
                     color = Ui.Muted, fontSize = 12.sp,
                 )
             } else {
@@ -229,16 +263,18 @@ private fun BmsTab() {
                 }
                 CellBars(cells, Modifier.fillMaxWidth().height(140.dp))
                 Text(
-                    "Odczyt heurystyczny. Różnica > 50 mV po naładowaniu = pakiet niezbalansowany.",
+                    "${cells.size} ogniw. Różnica > 50 mV po naładowaniu = pakiet niezbalansowany.",
                     color = Ui.Muted, fontSize = 11.sp,
                 )
             }
         }
 
-        Panel(title = "Surowe dane BMS") {
+        Panel(title = "Surowe dane") {
+            Text("0x20: " + Voltix.hex(t.rawMeter1).ifEmpty { "brak" }, color = Ui.Muted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            Text("0x21: " + Voltix.hex(t.rawMeter2).ifEmpty { "brak" }, color = Ui.Muted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
             Text("0x64: " + Voltix.hex(t.rawBmsVoltage).ifEmpty { "brak" }, color = Ui.Muted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
             Text("0x65: " + Voltix.hex(t.rawBmsInfo).ifEmpty { "brak" }, color = Ui.Muted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-            OutlinedButton(onClick = { s.queryInfo() }, modifier = Modifier.fillMaxWidth()) { Text("Odpytaj BMS") }
+            PillButton("Odpytaj BMS", Modifier.fillMaxWidth(), color = Ui.Card2, textColor = Color.White) { s.queryInfo() }
         }
         Text("", Modifier.height(4.dp))
     }
@@ -307,15 +343,12 @@ private fun AccelTab() {
                 fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
             )
             if (state == AccelState.IDLE) {
-                Button(onClick = { a.armAccel(targets[target]) }, modifier = Modifier.fillMaxWidth()) { Text("START") }
+                PillButton("Start", Modifier.fillMaxWidth()) { a.armAccel(targets[target]) }
             } else {
-                Button(
-                    onClick = { a.cancelAccel() }, modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Ui.Danger),
-                ) { Text("Anuluj") }
+                PillButton("Anuluj", Modifier.fillMaxWidth(), color = Ui.Danger, textColor = Color.White) { a.cancelAccel() }
             }
             Text(
-                "Tylko na pustej, bezpiecznej drodze. Pomiar z prędkościomierza hulajnogi (4 Hz) – dokładność ok. ±0,3 s.",
+                "Tylko na pustej, bezpiecznej drodze. Pomiar z prędkościomierza hulajnogi (interpolowany).",
                 color = Ui.Muted, fontSize = 11.sp,
             )
         }

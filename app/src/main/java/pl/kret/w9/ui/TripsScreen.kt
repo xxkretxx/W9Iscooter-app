@@ -15,6 +15,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,8 +64,8 @@ fun TripsScreen() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Trasy", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LargeTitle("Trasy")
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Stat("Łącznie", "${f1(Ui.dist(app.trips.totalKm()))} ${Ui.distUnit}", Modifier.weight(1f))
                     Stat("Przejazdów", "${trips.size}", Modifier.weight(1f))
@@ -100,12 +103,26 @@ private val dateFmt = SimpleDateFormat("d MMM yyyy, HH:mm", Locale("pl"))
 
 @Composable
 private fun TripRow(t: Trip, onClick: () -> Unit) {
-    Panel(Modifier.clickable(onClick = onClick)) {
-        Text(dateFmt.format(Date(t.start)), color = Color.White, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("${f1(Ui.dist(t.distanceM / 1000))} ${Ui.distUnit}", color = Ui.Accent, fontWeight = FontWeight.Bold)
-            Text(duration(t.durationS), color = Ui.Muted)
-            Text("śr. ${f0(Ui.speed(t.avgKmh))} • max ${f0(Ui.speed(t.maxKmh))} ${Ui.speedUnit}", color = Ui.Muted)
+    Appear {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Ui.Card)
+                .bounceClick { onClick() }.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.foundation.layout.Box(
+                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Ui.Accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Route, null, tint = Ui.Accent) }
+            androidx.compose.foundation.layout.Spacer(Modifier.size(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("${f1(Ui.dist(t.distanceM / 1000))} ${Ui.distUnit}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(dateFmt.format(Date(t.start)), color = Ui.Muted, fontSize = 13.sp)
+                Text(
+                    "${duration(t.durationS)} · śr. ${f0(Ui.speed(t.avgKmh))} · max ${f0(Ui.speed(t.maxKmh))} ${Ui.speedUnit}",
+                    color = Ui.Muted, fontSize = 13.sp,
+                )
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = Ui.Track)
         }
     }
 }

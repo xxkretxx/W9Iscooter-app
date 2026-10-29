@@ -1,7 +1,19 @@
 package pl.kret.w9.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,23 +27,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.BluetoothConnected
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.FlashlightOn
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.TrendingFlat
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.FiberManualRecord
+import androidx.compose.material.icons.rounded.FlashlightOn
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.TrendingFlat
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,7 +50,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,7 +68,6 @@ fun DashboardScreen() {
     val state by scooter.state.collectAsStateWithLifecycle()
     val t by scooter.telemetry.collectAsStateWithLifecycle()
     val name by scooter.deviceName.collectAsStateWithLifecycle()
-    val gear by scooter.gear.collectAsStateWithLifecycle()
     val recording by app.recorder.recording.collectAsStateWithLifecycle()
     val live by app.recorder.live.collectAsStateWithLifecycle()
     var showScan by remember { mutableStateOf(false) }
@@ -70,98 +79,137 @@ fun DashboardScreen() {
     val speed = if (useGps && recording) live.gpsKmh else t.speedKmh
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // --- pasek połączenia ---
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (connected) Icons.Filled.BluetoothConnected else Icons.Filled.Bluetooth,
-                contentDescription = null,
-                tint = if (connected) Ui.Accent else Ui.Muted,
+        // ---------- nagłówek ----------
+        LargeTitle(
+            title = name ?: "W9 Scooter",
+            subtitle = null,
+            trailing = {
+                AnimatedContent(
+                    targetState = connected,
+                    transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
+                    label = "connBtn",
+                ) { c ->
+                    Text(
+                        if (c) "Rozłącz" else "Połącz",
+                        color = if (c) Ui.Danger else Color.Black,
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 6.dp).clip(CircleShape)
+                            .background(if (c) Ui.Danger.copy(alpha = 0.16f) else Ui.Accent)
+                            .bounceClick { if (c) scooter.disconnect() else { showScan = true; scooter.startScan() } }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            },
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 0.dp)) {
+            val dot = when (state) {
+                ConnState.CONNECTED -> Ui.Accent
+                ConnState.CONNECTING, ConnState.SCANNING -> Ui.Warn
+                ConnState.DISCONNECTED -> Ui.Muted
+            }
+            PulseDot(dot, pulsing = state != ConnState.DISCONNECTED)
+            Text(
+                when (state) {
+                    ConnState.CONNECTED -> "Połączono" + (t.serial?.let { " · $it" } ?: "")
+                    ConnState.CONNECTING -> "Łączenie…"
+                    ConnState.SCANNING -> "Szukanie hulajnogi…"
+                    ConnState.DISCONNECTED -> "Rozłączono"
+                },
+                color = Ui.Muted, fontSize = 15.sp,
             )
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(name ?: "Brak hulajnogi", color = Color.White, fontWeight = FontWeight.SemiBold)
-                Text(
-                    when (state) {
-                        ConnState.CONNECTED -> "Połączono"
-                        ConnState.CONNECTING -> "Łączenie…"
-                        ConnState.SCANNING -> "Szukanie…"
-                        ConnState.DISCONNECTED -> "Rozłączono"
-                    },
-                    color = Ui.Muted, fontSize = 12.sp,
-                )
-            }
-            if (connected) OutlinedButton(onClick = { scooter.disconnect() }) { Text("Rozłącz") }
-            else Button(onClick = { showScan = true; scooter.startScan() }) { Text("Połącz") }
         }
 
-        Speedometer(kmh = speed, maxKmh = 50.0, modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp))
-
-        // --- szybkie akcje ---
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            QuickToggle(if (t.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, if (t.locked) "Zablokowana" else "Odblokowana", t.locked) {
-                if (t.locked) scooter.unlock(app.prefs.pin) else scooter.lock()
-            }
-            QuickToggle(Icons.Filled.FlashlightOn, "Światło", t.lightOn) { scooter.setLight(!t.lightOn) }
-            QuickToggle(Icons.Filled.TrendingFlat, "Tempomat", t.cruiseOn) { scooter.setCruise(!t.cruiseOn) }
+        // ---------- prędkościomierz ----------
+        Appear(60) {
+            Speedometer(
+                kmh = speed, maxKmh = 50.0,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                label = t.speedMode?.let { MODE_NAMES.getOrNull(it) }?.takeIf { connected },
+            )
         }
 
-        // --- bateria ---
+        // ---------- szybkie akcje (jak Centrum sterowania) ----------
+        Appear(120) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                ControlTile(if (t.locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen, if (t.locked) "Zablokowana" else "Blokada", t.locked, Ui.Danger) {
+                    scooter.toggleLock()
+                }
+                ControlTile(Icons.Rounded.FlashlightOn, "Światło", t.headlightOn, Ui.Yellow) { scooter.setLight(!t.headlightOn) }
+                ControlTile(Icons.Rounded.TrendingFlat, "Tempomat", t.cruiseOn, Ui.Blue) { scooter.setCruise(!t.cruiseOn) }
+                ControlTile(Icons.Rounded.Bolt, "Zero start", t.zeroStart, Ui.Purple) { scooter.setZeroStart(!t.zeroStart) }
+            }
+        }
+
+        // ---------- bateria ----------
         Panel(title = "Bateria") {
             val kmPerPct = app.trips.kmPerPercent()
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("${t.batteryPct}%", color = batteryColor(t.batteryPct), fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.weight(1f))
-                val range = if (kmPerPct != null) t.batteryPct * kmPerPct else t.batteryPct * 0.40 // W9 ≈ 40 km
-                Text("zasięg ~${f0(Ui.dist(range))} ${Ui.distUnit}", color = Ui.Muted)
+            val scooterRange = t.rangeKm2?.takeIf { it > 0 } ?: t.rangeKm?.takeIf { it > 0 }
+            val range = scooterRange?.toDouble() ?: if (kmPerPct != null) t.batteryPct * kmPerPct else t.batteryPct * 0.40
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(92.dp), contentAlignment = Alignment.Center) {
+                    Ring(t.batteryPct / 100f, batteryColor(t.batteryPct), Modifier.fillMaxSize(), stroke = 10.dp)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("${t.batteryPct}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        Text("%", color = Ui.Muted, fontSize = 12.sp)
+                    }
+                }
+                Spacer(Modifier.width(18.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("~${f0(Ui.dist(range))} ${Ui.distUnit}", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                    Text("szacowany zasięg", color = Ui.Muted, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        t.voltage?.let { Text("${f1(it)} V", color = Ui.Muted, fontSize = 13.sp) }
+                        t.powerW?.let { Text("${f0(it)} W", color = Ui.Muted, fontSize = 13.sp) }
+                    }
+                    if (t.charging) Text("⚡ Ładowanie", color = Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (t.lowPower) Text("Niski poziom baterii", color = Ui.Danger, fontSize = 13.sp)
+                }
             }
-            LinearProgressIndicator(
-                progress = { t.batteryPct / 100f },
-                modifier = Modifier.fillMaxWidth(),
-                color = batteryColor(t.batteryPct),
-                trackColor = Ui.Track,
-            )
-            if (t.charging) Text("⚡ Ładowanie", color = Ui.Accent)
         }
 
-        // --- statystyki ---
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Stat("Bieg", "$gear", Modifier.weight(1f))
-            Stat("Limit", t.speedLimitKmh?.let { "${f0(Ui.speed(it.toDouble()))} ${Ui.speedUnit}" } ?: "–", Modifier.weight(1f))
-            Stat("Błąd", if (t.faultCode == 0) "OK" else "E${t.faultCode}", Modifier.weight(1f), if (t.faultCode == 0) Ui.Accent else Ui.Danger)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Stat("Napięcie", t.voltage?.let { "${f1(it)} V" } ?: "–", Modifier.weight(1f))
-            Stat("Prąd", t.currentA?.let { "${f1(it)} A" } ?: "–", Modifier.weight(1f))
-            Stat("Moc", t.powerW?.let { "${f0(it)} W" } ?: "–", Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Stat("Temp.", t.tempC?.let { "${f0(it)} °C" } ?: "–", Modifier.weight(1f))
-            Stat("Prędkość GPS", if (recording) "${f0(Ui.speed(live.gpsKmh))}" else "–", Modifier.weight(1f))
+        // ---------- statystyki ----------
+        Panel(title = "Jazda") {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Limit", t.speedLimitKmh?.takeIf { it > 0 }?.let { "${f0(Ui.speed(it.toDouble()))}" } ?: "–", Modifier.weight(1f))
+                Stat("Śr. prędk.", if (t.avgSpeedKmh > 0) f0(Ui.speed(t.avgSpeedKmh)) else "–", Modifier.weight(1f))
+                Stat("Błąd", if (t.faultCode == 0) "OK" else "E${t.faultCode}", Modifier.weight(1f), if (t.faultCode == 0) Ui.Accent else Ui.Danger)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Trasa", t.tripKm?.let { "${f1(Ui.dist(it))} ${Ui.distUnit}" } ?: "–", Modifier.weight(1f))
+                Stat("Przebieg", t.odometerKm?.let { "${f0(Ui.dist(it))} ${Ui.distUnit}" } ?: "–", Modifier.weight(1f))
+                Stat("KERS", t.kersLevel?.let { KERS_NAMES.getOrElse(it) { "$it" }.take(6) } ?: "–", Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Prąd", t.currentA?.let { "${f1(it)} A" } ?: "–", Modifier.weight(1f))
+                Stat("Bateria", t.batteryTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
+                Stat("Silnik", t.motorTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
+            }
         }
 
-        // --- nagrywanie trasy ---
-        Panel(title = "Trasa") {
+        // ---------- nagrywanie trasy ----------
+        Panel(title = "Trasa GPS") {
             if (recording) {
                 val dur = (now - live.start) / 1000
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Stat("Dystans", "${f1(Ui.dist(live.distanceM / 1000))} ${Ui.distUnit}", Modifier.weight(1f))
                     Stat("Czas", duration(dur), Modifier.weight(1f))
                     Stat("Max", f0(Ui.speed(live.maxKmh)), Modifier.weight(1f))
                 }
-                Button(
-                    onClick = { app.recorder.stop() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Ui.Danger),
-                ) { Icon(Icons.Filled.Stop, null); Spacer(Modifier.width(6.dp)); Text("Zakończ i zapisz") }
+                PillButton(
+                    "Zakończ i zapisz", Modifier.fillMaxWidth(), color = Ui.Danger, textColor = Color.White,
+                    leading = { Icon(Icons.Rounded.Stop, null, tint = Color.White) },
+                ) { app.recorder.stop() }
             } else {
-                Button(onClick = { app.recorder.start() }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.FiberManualRecord, null); Spacer(Modifier.width(6.dp)); Text("Start nagrywania trasy")
-                }
+                PillButton(
+                    "Nagrywaj trasę", Modifier.fillMaxWidth(), color = Ui.Card2, textColor = Color.White,
+                    leading = { RecordDot() },
+                ) { app.recorder.start() }
             }
         }
+        Spacer(Modifier.size(8.dp))
     }
 
     if (showScan) ScanDialog(onDismiss = { scooter.stopScan(); showScan = false })
@@ -174,15 +222,24 @@ fun batteryColor(p: Int): Color = when {
 }
 
 @Composable
-private fun QuickToggle(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FilledTonalIconToggleButton(
-            checked = on,
-            onCheckedChange = { onClick() },
-            modifier = Modifier.size(64.dp),
-            shape = CircleShape,
-        ) { Icon(icon, contentDescription = label, tint = if (on) Ui.Accent else Color.White) }
-        Text(label, color = Ui.Muted, fontSize = 12.sp)
+private fun RecordDot() {
+    val tr = rememberInfiniteTransition(label = "rec")
+    val a by tr.animateFloat(1f, 0.35f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "recA")
+    Icon(Icons.Rounded.FiberManualRecord, null, tint = Ui.Danger.copy(alpha = a))
+}
+
+/** Okrągły kafelek jak w Centrum sterowania iOS – aktywny podświetla się kolorem. */
+@Composable
+private fun ControlTile(icon: ImageVector, label: String, on: Boolean, activeColor: Color, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (on) activeColor else Ui.Card2, tween(250), label = "tileBg")
+    val fg by animateColorAsState(if (on) Color.White else Color.White.copy(alpha = 0.9f), tween(250), label = "tileFg")
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(78.dp)) {
+        Box(
+            Modifier.size(64.dp).clip(CircleShape).background(bg).bounceClick { onClick() },
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(28.dp)) }
+        Spacer(Modifier.size(6.dp))
+        Text(label, color = if (on) Color.White else Ui.Muted, fontSize = 12.sp, maxLines = 1)
     }
 }
 
@@ -196,35 +253,56 @@ fun ScanDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Wybierz hulajnogę") },
+        containerColor = Ui.Card,
+        shape = RoundedCornerShape(22.dp),
+        title = { Text("Wybierz hulajnogę", fontWeight = FontWeight.SemiBold) },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (!scooter.bluetoothOn) Text("Włącz Bluetooth w telefonie!", color = Ui.Danger)
-                if (state == ConnState.SCANNING) LinearProgressIndicator(Modifier.fillMaxWidth())
-                SwitchRow("Pokaż wszystkie urządzenia", showAll, "domyślnie tylko z usługą Voltix FF60") { showAll = it }
+                if (state == ConnState.SCANNING) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Ui.Accent, trackColor = Ui.Card2)
+                SwitchRow("Wszystkie urządzenia", showAll, "domyślnie tylko Voltix (FF60)") { showAll = it }
                 if (shown.isEmpty()) Text(
                     if (state == ConnState.SCANNING) "Szukam… włącz hulajnogę i trzymaj telefon blisko." else "Nic nie znaleziono.",
                     color = Ui.Muted, modifier = Modifier.padding(vertical = 12.dp),
                 )
-                LazyColumn(Modifier.heightIn(max = 340.dp)) {
+                LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(shown, key = { it.address }) { d ->
                         Row(
-                            Modifier.fillMaxWidth().clickable {
-                                scooter.connect(d.address, d.name); onDismiss()
-                            }.padding(vertical = 10.dp),
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Ui.Card2)
+                                .clickable { scooter.connect(d.address, d.name); onDismiss() }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(d.name, color = if (d.voltix) Ui.Accent else Color.White, fontWeight = FontWeight.SemiBold)
-                                Text(d.address + if (d.voltix) "  • Voltix" else "", color = Ui.Muted, fontSize = 12.sp)
+                                Text(d.name, color = if (d.voltix) Color.White else Ui.Muted, fontWeight = FontWeight.SemiBold)
+                                Text(d.address, color = Ui.Muted, fontSize = 12.sp)
                             }
-                            Text("${d.rssi} dBm", color = Ui.Muted, fontSize = 12.sp)
+                            SignalBars(d.rssi)
                         }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { scooter.startScan() }) { Text("Skanuj ponownie") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Zamknij") } },
+        confirmButton = { TextButton(onClick = { scooter.startScan() }) { Text("Skanuj ponownie", color = Ui.Blue) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Zamknij", color = Ui.Blue) } },
     )
+}
+
+/** Paski zasięgu sygnału jak w iOS. */
+@Composable
+private fun SignalBars(rssi: Int) {
+    val level = when {
+        rssi > -60 -> 4
+        rssi > -70 -> 3
+        rssi > -80 -> 2
+        else -> 1
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
+        for (k in 1..4) {
+            Box(
+                Modifier.size(width = 4.dp, height = (k * 4).dp)
+                    .clip(RoundedCornerShape(1.dp)).background(if (k <= level) Color.White else Ui.Track),
+            )
+        }
+    }
 }

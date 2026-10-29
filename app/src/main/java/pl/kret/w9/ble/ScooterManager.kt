@@ -79,8 +79,6 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     private var writeAck: Channel<Unit> = Channel(Channel.CONFLATED)
     private var sessionJobs = ArrayList<Job>()
     private var userDisconnect = false
-    private var pollSub: Int? = null
-    private var pollsWithoutReply = 0
     private var lastAlarm = 0L
     private var lastBatteryAlert = 101
 
@@ -259,8 +257,6 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
 
     private fun startSession() {
         _state.value = ConnState.CONNECTED
-        pollSub = null
-        pollsWithoutReply = 0
         // Kolejka zapisu – Android pozwala na 1 operację GATT naraz.
         sessionJobs += scope.launch {
             while (isActive) {
@@ -270,36 +266,24 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
                 delay(30)
             }
         }
+        // Sekwencja jak w Voltix: connect ×2, potem heartbeat co 1 s.
+        // Telemetrię (0x20 / 0x21) hulajnoga wysyła sama – nie trzeba o nią pytać.
         sessionJobs += scope.launch {
             send(Voltix.connectFrame(), "connect")
-            delay(1000)
+            delay(500)
             send(Voltix.connectFrame(), "connect")
-            delay(300)
-            send(Voltix.heartbeatFrame(), "heartbeat")
-            delay(300)
-            queryInfo()
+            delay(500)
+            send(Voltix.query(Voltix.QUERY_SN), "serial")
+            send(Voltix.query(Voltix.QUERY_SPEED_LIMIT), "zakres limitu")
             var n = 0
             while (isActive) {
                 n++
-                send(Voltix.queryCarFrame(pollSub), null)
-                if (prefs.bmsPoll) {
-                    if (n % 2 == 0) send(Voltix.query(Voltix.QUERY_BMS_VOLTAGE, 0), null)
-                    if (n % 15 == 0) send(Voltix.query(Voltix.QUERY_BMS_INFO, 0), null)
-                }
-                pollsWithoutReply++
-                if (pollsWithoutReply == 4) {
-                    pollSub = if (pollSub == null) 0x01 else null
-                    addLog('•', "Brak telemetrii – zmieniam zapytanie na " + Voltix.hex(Voltix.queryCarFrame(pollSub)))
-                    pollsWithoutReply = 0
-                }
-                val accel = analytics.accelState.value != AccelState.IDLE
-                delay(if (fastPoll || accel) 250L else prefs.pollMs.toLong())
-            }
-        }
-        sessionJobs += scope.launch {
-            while (isActive) {
-                delay(10_000)
                 send(Voltix.heartbeatFrame(), null)
+                if (prefs.bmsPoll) {
+                    if (n % 3 == 0) send(Voltix.query(Voltix.QUERY_BMS_VOLTAGE, 1), null)
+                    if (n % 6 == 0) send(Voltix.query(Voltix.QUERY_BMS_INFO, 1), null)
+                }
+                delay(1000)
             }
         }
     }
@@ -338,50 +322,45 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
 
     fun queryInfo() {
         send(Voltix.query(Voltix.QUERY_SN), "serial")
-        send(Voltix.query(Voltix.QUERY_SPEED_LIMIT), "limit")
-        send(Voltix.query(Voltix.QUERY_LIGHT), "światła")
-        send(Voltix.query(Voltix.QUERY_BMS_VOLTAGE, 0), "BMS napięcie")
-        send(Voltix.query(Voltix.QUERY_BMS_INFO, 0), "BMS info")
-        send(Voltix.query(Voltix.QUERY_FIRMWARE, 0), "firmware")
+        send(Voltix.query(Voltix.QUERY_SPEED_LIMIT), "zakres limitu")
+        send(Voltix.query(Voltix.QUERY_BMS_VOLTAGE, 1), "BMS ogniwa")
+        send(Voltix.query(Voltix.QUERY_BMS_INFO, 1), "BMS info")
+        send(Voltix.query(Voltix.QUERY_FIRMWARE, 1), "firmware")
     }
+
+    private val lastRaw = HashMap<Int, ByteArray>()
 
     private fun handle(f: ByteArray) {
         val p = Voltix.payload(f)
         val cmd = f[2].toInt() and 0xFF
         val name = Voltix.NAMES[cmd] ?: "0x%02X".format(cmd)
         val crc = if (Voltix.crcOk(f)) "" else "  CRC?"
-        val periodic = cmd == Voltix.QUERY_CAR || cmd == Voltix.QUERY_BMS_VOLTAGE || cmd == Voltix.QUERY_BMS_INFO
-        val raw = when (cmd) {
-            Voltix.QUERY_CAR -> _telemetry.value.rawQueryCar
-            Voltix.QUERY_BMS_VOLTAGE -> _telemetry.value.rawBmsVoltage
-            Voltix.QUERY_BMS_INFO -> _telemetry.value.rawBmsInfo
-            else -> null
-        }
-        if (!periodic || raw == null || !p.contentEquals(raw)) {
+        // Cykliczne ramki logujemy tylko gdy się zmieniły.
+        val prev = lastRaw[cmd]
+        if (prev == null || !prev.contentEquals(f)) {
             addLog('←', Voltix.hex(f) + "  " + name + crc)
+            lastRaw[cmd] = f
         }
         when (cmd) {
-            Voltix.QUERY_CAR -> {
-                pollsWithoutReply = 0
-                _telemetry.update { it.withQueryCar(p) }
+            Voltix.METER1 -> {
+                _telemetry.update { it.withMeter1(f) }
                 analytics.onTelemetry(_telemetry.value)
                 checkSpeedAlarm()
                 checkBattery()
             }
-            Voltix.QUERY_SPEED_LIMIT -> {
-                val v = p.firstOrNull()?.toInt()?.and(0xFF)
-                if (v != null && v in 1..79) _telemetry.update { it.copy(speedLimitKmh = v) }
-            }
-            Voltix.QUERY_LIGHT, Voltix.LIGHT -> {
-                p.firstOrNull()?.let { b -> _telemetry.update { it.copy(lightFlags = b.toInt() and 0xFF) } }
+            Voltix.METER2 -> _telemetry.update { it.withMeter2(f) }
+            Voltix.QUERY_SPEED_LIMIT -> if (p.size >= 2) {
+                val mn = p[0].toInt() and 0xFF
+                val mx = p[1].toInt() and 0xFF
+                _telemetry.update { it.copy(limitMin = mn, limitMax = mx) }
             }
             Voltix.QUERY_SN -> {
                 val s = String(p.filter { it in 0x20..0x7E }.toByteArray(), Charsets.US_ASCII)
                 if (s.isNotBlank()) _telemetry.update { it.copy(serial = s) }
             }
             Voltix.QUERY_FIRMWARE -> _telemetry.update { it.copy(firmware = Voltix.hex(p)) }
-            Voltix.QUERY_BMS_VOLTAGE -> _telemetry.update { it.withMeter2(p).copy(rawBmsVoltage = p) }
-            Voltix.QUERY_BMS_INFO -> _telemetry.update { it.withMeter2(p).copy(rawBmsInfo = p) }
+            Voltix.QUERY_BMS_VOLTAGE -> _telemetry.update { it.withCells(f) }
+            Voltix.QUERY_BMS_INFO -> _telemetry.update { it.withBmsInfo(f) }
         }
     }
 
@@ -420,28 +399,47 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     }
 
     // ---------------- sterowanie ----------------
+    /** Tryb jazdy: 0 spacer, 1 eko, 2 normalny, 3 sport (tylko na postoju). */
     fun setGear(g: Int) {
         _gear.value = g
         prefs.lastGear = g
-        send(Voltix.build(Voltix.GEAR, 2, g), "bieg $g")
+        send(Voltix.build(Voltix.GEAR, 2, g, 0), "tryb $g")
     }
 
-    fun lock() = send(Voltix.build(Voltix.LOCK, 2, 0x00), "blokada")
+    /** Voltix wysyła tę samą komendę do zablokowania i odblokowania (przełącznik). */
+    fun lock() = send(Voltix.build(Voltix.LOCK, 2, 0x00), "blokada (przełącz)")
 
     fun unlock(pin: String?) {
-        val digits = pin?.takeIf { it.length == 4 && it.all(Char::isDigit) }?.map { it.digitToInt() } ?: emptyList()
-        send(Voltix.build(Voltix.LOCK, 2, *(intArrayOf(0x00) + digits.toIntArray())), "odblokuj")
+        val digits = pin?.takeIf { it.length == 4 && it.all(Char::isDigit) && _telemetry.value.lockHasPin }
+            ?.map { it.digitToInt() } ?: emptyList()
+        send(Voltix.build(Voltix.LOCK, 2, *(intArrayOf(0x00) + digits.toIntArray())), "odblokuj (przełącz)")
     }
 
-    fun setLight(on: Boolean) = send(Voltix.build(Voltix.LIGHT, 2, if (on) prefs.lightOnValue else 0x00), "światło ${if (on) "ON" else "OFF"}")
-    fun setCruise(on: Boolean) = send(Voltix.build(Voltix.CRUISE, 2, if (on) 0x01 else 0x00), "tempomat ${if (on) "ON" else "OFF"}")
-    fun setSpeedLimit(kmh: Int) = send(Voltix.build(Voltix.SPEED_LIMIT, 2, kmh), "limit $kmh km/h")
+    fun toggleLock() = if (_telemetry.value.locked) unlock(prefs.pin) else { lock(); Unit }
+
+    /** Przednie światło: [00 FA 00 00 00 00] = ON, same zera = OFF (jak w Voltix). */
+    fun setLight(on: Boolean) =
+        send(if (on) Voltix.build(Voltix.LIGHT, 2, 0, 250, 0, 0, 0, 0) else Voltix.build(Voltix.LIGHT, 2, 0, 0, 0, 0, 0, 0), "światło ${if (on) "ON" else "OFF"}")
+
+    /** Tempomat: [05 03] = ON, [00 03] = OFF. */
+    fun setCruise(on: Boolean) = send(Voltix.build(Voltix.CRUISE, 2, if (on) 5 else 0, 3), "tempomat ${if (on) "ON" else "OFF"}")
+
+    /** Limit prędkości (km/h) – hulajnoga przyjmuje go tylko na postoju i w zakresie min–max. */
+    fun setSpeedLimit(kmh: Int): Boolean {
+        val t = _telemetry.value
+        val v = kmh.coerceIn(t.limitMin ?: 1, t.limitMax ?: 99)
+        if (t.speedKmh > 0.5) addLog('•', "Limit zmienisz tylko na postoju")
+        return send(Voltix.build(Voltix.SPEED_LIMIT, 2, v), "limit $v km/h")
+    }
+
     fun setUnit(mph: Boolean) = send(Voltix.build(Voltix.UNIT, 2, if (mph) 1 else 0), "jednostka ${if (mph) "mph" else "km/h"}")
-    fun setEBrake(level: Int) = send(Voltix.build(Voltix.E_BRAKE, 2, level), "hamulec el. $level")
+
+    /** Rekuperacja: 0 adaptacyjna, 1 słaba, 2 średnia, 3 mocna. */
+    fun setEBrake(level: Int) = send(Voltix.build(Voltix.E_BRAKE, 2, level.coerceIn(0, 3)), "KERS $level")
     fun setZeroStart(on: Boolean) = send(Voltix.build(Voltix.START_MODE, 2, if (on) 1 else 0, 0), "start od zera ${if (on) "ON" else "OFF"}")
-    fun setBrightness(level: Int) = send(Voltix.build(Voltix.GAUGE_BRIGHTNESS, 2, level), "jasność $level")
     fun setSmartLock(on: Boolean) = send(Voltix.build(Voltix.SMART_LOCK, 2, if (on) 1 else 0), "smart lock ${if (on) "ON" else "OFF"}")
-    fun setDriveMode(mode: Int) = send(Voltix.build(Voltix.DRIVE_MODE, 2, mode), "tryb jazdy $mode")
+    /** Napęd: 0 = jeden silnik, 1 = dwa silniki (tylko modele 2×silnik). */
+    fun setDriveMode(mode: Int) = send(Voltix.build(Voltix.DRIVE_MODE, 2, mode), "napęd $mode")
 
     fun sendHex(hex: String, addFraming: Boolean): Boolean {
         val b = Voltix.parseHex(hex) ?: run { addLog('•', "Zły HEX"); return false }

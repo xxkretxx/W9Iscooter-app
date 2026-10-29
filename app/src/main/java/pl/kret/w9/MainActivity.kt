@@ -7,19 +7,42 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import pl.kret.w9.ui.rememberHaptic
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,36 +74,33 @@ class MainActivity : ComponentActivity() {
             W9Theme {
                 var tab by rememberSaveable { mutableIntStateOf(0) }
                 val tabs: List<Pair<String, ImageVector>> = listOf(
-                    "Licznik" to Icons.Filled.Speed,
-                    "Sterowanie" to Icons.Filled.Tune,
-                    "Analiza" to Icons.Filled.ShowChart,
-                    "Trasy" to Icons.Filled.Map,
-                    "Więcej" to Icons.Filled.Settings,
+                    "Licznik" to Icons.Rounded.Speed,
+                    "Sterowanie" to Icons.Rounded.Tune,
+                    "Analiza" to Icons.Rounded.Insights,
+                    "Trasy" to Icons.Rounded.Map,
+                    "Więcej" to Icons.Rounded.MoreHoriz,
                 )
-                Scaffold(
-                    containerColor = Ui.Bg,
-                    bottomBar = {
-                        NavigationBar(containerColor = Ui.Card) {
-                            tabs.forEachIndexed { i, (label, icon) ->
-                                NavigationBarItem(
-                                    selected = tab == i,
-                                    onClick = { tab = i },
-                                    icon = { Icon(icon, contentDescription = label) },
-                                    label = { Text(label, maxLines = 1, fontSize = 11.sp) },
-                                )
+                Column(Modifier.fillMaxSize().background(Ui.Bg).systemBarsPadding()) {
+                    AnimatedContent(
+                        targetState = tab,
+                        modifier = Modifier.weight(1f),
+                        transitionSpec = {
+                            (fadeIn(tween(260)) + scaleIn(tween(260), initialScale = 0.97f)) togetherWith
+                                fadeOut(tween(160))
+                        },
+                        label = "tabs",
+                    ) { t ->
+                        Box(Modifier.fillMaxSize()) {
+                            when (t) {
+                                0 -> DashboardScreen()
+                                1 -> ControlsScreen()
+                                2 -> AnalysisScreen()
+                                3 -> TripsScreen()
+                                else -> MoreScreen(onKeepScreenChanged = { applyKeepScreenOn() })
                             }
                         }
-                    },
-                ) { pad ->
-                    Box(Modifier.fillMaxSize().padding(pad)) {
-                        when (tab) {
-                            0 -> DashboardScreen()
-                            1 -> ControlsScreen()
-                            2 -> AnalysisScreen()
-                            3 -> TripsScreen()
-                            else -> MoreScreen(onKeepScreenChanged = { applyKeepScreenOn() })
-                        }
                     }
+                    IosTabBar(tabs, tab) { tab = it }
                 }
             }
         }
@@ -104,5 +124,29 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= 33) p += Manifest.permission.POST_NOTIFICATIONS
         return p.toTypedArray()
+    }
+}
+
+@Composable
+private fun IosTabBar(tabs: List<Pair<String, ImageVector>>, selected: Int, onSelect: (Int) -> Unit) {
+    val haptic = rememberHaptic()
+    Column(Modifier.fillMaxWidth().background(Color(0xF2121214))) {
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(Ui.Separator))
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp)) {
+            tabs.forEachIndexed { i, (label, icon) ->
+                val sel = i == selected
+                val color by animateColorAsState(if (sel) Ui.Accent else Ui.Muted, tween(200), label = "tabc")
+                val scale by animateFloatAsState(if (sel) 1.12f else 1f, spring(dampingRatio = 0.5f, stiffness = 400f), label = "tabs")
+                Column(
+                    Modifier.weight(1f).clickable(
+                        interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    ) { if (!sel) haptic(); onSelect(i) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(26.dp).scale(scale))
+                    Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                }
+            }
+        }
     }
 }
