@@ -84,9 +84,9 @@ fun ControlsScreen() {
                 }
             }
             Text(
-                profiles.joinToString("\n") {
-                    "${it.name}: ${MODE_NAMES.getOrElse(it.gear) { "${it.gear}" }}, ${it.limitKmh} km/h, KERS ${KERS_NAMES.getOrElse(it.kers) { "${it.kers}" }}" +
-                        if (it.zeroStart) ", zero start" else ""
+                profiles.joinToString("\n") { pr ->
+                    "${pr.name}: ${MODE_NAMES.getOrNull(pr.gear) ?: pr.gear}, ${pr.limitKmh} km/h, KERS ${KERS_NAMES.getOrNull(pr.kers) ?: pr.kers}" +
+                        if (pr.zeroStart) ", zero start" else ""
                 },
                 color = Ui.Muted, fontSize = 11.sp,
             )
