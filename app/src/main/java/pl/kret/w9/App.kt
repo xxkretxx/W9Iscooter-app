@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import pl.kret.w9.ble.ScooterManager
 import pl.kret.w9.trip.TripRecorder
@@ -32,6 +33,32 @@ class App : Application() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS, "Alerty", NotificationManager.IMPORTANCE_HIGH))
         autoLight = AutoLight(this, scooter, prefs)
         autoLight.update()
+        startAutoRecord()
+    }
+
+    private val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+    private var autoStarted = false
+    private var stillSince = 0L
+
+    /** Auto-nagrywanie: start gdy jedziesz > 5 km/h, koniec po 3 min postoju. */
+    private fun startAutoRecord() {
+        appScope.launch {
+            scooter.telemetry.collect { t ->
+                if (!prefs.autoRecord) return@collect
+                val connected = scooter.state.value == pl.kret.w9.ble.ConnState.CONNECTED
+                val rec = recorder.recording.value
+                val now = System.currentTimeMillis()
+                if (!rec) autoStarted = false // zatrzymane ręcznie
+                if (!rec && connected && t.speedKmh > 5.0 && !t.locked) {
+                    recorder.start(); autoStarted = true; stillSince = 0L
+                } else if (rec && autoStarted) {
+                    if (t.speedKmh < 0.5) {
+                        if (stillSince == 0L) stillSince = now
+                        if (now - stillSince > 180_000) { recorder.stop(); autoStarted = false; stillSince = 0L }
+                    } else stillSince = 0L
+                }
+            }
+        }
     }
 
     companion object {
@@ -102,6 +129,31 @@ class Prefs(ctx: Context) {
     /** km (łączny przebieg) przy ostatnim wykonaniu czynności serwisowej. */
     fun serviceDoneAt(key: String): Double = sp.getFloat("svc_$key", 0f).toDouble()
     fun setServiceDone(key: String, km: Double) = sp.edit().putFloat("svc_$key", km.toFloat()).apply()
+
+    var theftAlarm: Boolean
+        get() = sp.getBoolean("theftAlarm", false)
+        set(v) = sp.edit().putBoolean("theftAlarm", v).apply()
+    var autoRecord: Boolean
+        get() = sp.getBoolean("autoRecord", false)
+        set(v) = sp.edit().putBoolean("autoRecord", v).apply()
+    var hudMirror: Boolean
+        get() = sp.getBoolean("hudMirror", true)
+        set(v) = sp.edit().putBoolean("hudMirror", v).apply()
+    var lockWithPin: Boolean
+        get() = sp.getBoolean("lockWithPin", false)
+        set(v) = sp.edit().putBoolean("lockWithPin", v).apply()
+    var appLock: Boolean
+        get() = sp.getBoolean("appLock", false)
+        set(v) = sp.edit().putBoolean("appLock", v).apply()
+    var ambientMode: Int
+        get() = sp.getInt("ambMode", 0)
+        set(v) = sp.edit().putInt("ambMode", v).apply()
+    var ambientBrightness: Int
+        get() = sp.getInt("ambBright", 100)
+        set(v) = sp.edit().putInt("ambBright", v).apply()
+    var ambientColors: List<Int>
+        get() = (sp.getString("ambColors", "00E0A4") ?: "00E0A4").split(",").mapNotNull { it.toIntOrNull(16) }
+        set(v) = sp.edit().putString("ambColors", v.joinToString(",") { "%06X".format(it and 0xFFFFFF) }).apply()
 
     var batteryWh: Int
         get() = sp.getInt("batteryWh", 672) // W9: 48 V × 14 Ah

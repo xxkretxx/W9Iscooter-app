@@ -150,6 +150,17 @@ private fun TripDetail(t: Trip, onClose: () -> Unit, onDelete: () -> Unit) {
                         Stat("Max", "${f0(Ui.speed(t.maxKmh))} ${Ui.speedUnit}", Modifier.weight(1f))
                         Stat("Bateria", t.batteryUsed?.let { "-$it%" } ?: "–", Modifier.weight(1f))
                     }
+                    val score = ecoScore(t)
+                    if (score != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Stat("Ocena eko", "★".repeat((score + 10) / 20).padEnd(5, '☆'), Modifier.weight(1f), Ui.Yellow)
+                            Stat("km / 1% bat.", f1(t.distanceM / 1000 / t.batteryUsed!!), Modifier.weight(1f))
+                        }
+                    }
+                    if (t.points.size > 2) {
+                        Text("PRĘDKOŚĆ NA TRASIE", color = Ui.Muted, fontSize = 12.sp)
+                        LineChart(t.points.map { Ui.speed(it.kmh) }, Ui.Accent, false, Modifier.fillMaxWidth().height(90.dp))
+                    }
                 }
             }
         }
@@ -210,4 +221,15 @@ fun shareGpx(ctx: android.content.Context, t: Trip) {
         addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     ctx.startActivity(android.content.Intent.createChooser(send, "Eksportuj trasę GPX"))
+}
+
+/**
+ * Ocena eko 0–100: ile km przejechane na 1% baterii względem nominalnych ~0,45 km/% dla W9 (45 km zasięgu).
+ * Spokojna jazda bez gwałtownych przyspieszeń daje 4–5 gwiazdek.
+ */
+fun ecoScore(t: Trip): Int? {
+    val used = t.batteryUsed ?: return null
+    if (used < 2 || t.distanceM < 500) return null
+    val kmPerPct = t.distanceM / 1000 / used
+    return (kmPerPct / 0.45 * 70).toInt().coerceIn(0, 100)
 }

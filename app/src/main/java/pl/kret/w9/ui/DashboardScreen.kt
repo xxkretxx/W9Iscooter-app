@@ -33,6 +33,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.FlashlightOn
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Stop
@@ -51,6 +56,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -69,8 +76,11 @@ fun DashboardScreen() {
     val t by scooter.telemetry.collectAsStateWithLifecycle()
     val name by scooter.deviceName.collectAsStateWithLifecycle()
     val recording by app.recorder.recording.collectAsStateWithLifecycle()
+    val peak by scooter.analytics.stats.collectAsStateWithLifecycle()
     val live by app.recorder.live.collectAsStateWithLifecycle()
     var showScan by remember { mutableStateOf(false) }
+    var showHud by remember { mutableStateOf(false) }
+    val alarm by scooter.alarm.collectAsStateWithLifecycle()
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(recording) { while (recording) { now = System.currentTimeMillis(); delay(1000) } }
 
@@ -122,14 +132,34 @@ fun DashboardScreen() {
             )
         }
 
+        // ---------- alarm ----------
+        if (alarm) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Ui.Danger)
+                    .bounceClick { scooter.stopAlarm() }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("ALARM!", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("Ktoś rusza zablokowaną hulajnogą", color = Color.White, fontSize = 14.sp)
+                }
+                Text("Wycisz", color = Ui.Danger, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clip(CircleShape).background(Color.White).padding(horizontal = 14.dp, vertical = 8.dp))
+            }
+        }
+
         // ---------- prędkościomierz ----------
         Appear(60) {
             Speedometer(
-                kmh = speed, maxKmh = 50.0,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                kmh = speed, maxKmh = maxOf(50.0, ((t.limitMax ?: 45) + 5).toDouble()),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).bounceClick { showHud = true },
                 label = t.speedMode?.let { MODE_NAMES.getOrNull(it) }?.takeIf { connected },
             )
         }
+        Text(
+            "Dotknij licznika – tryb HUD", color = Ui.Muted, fontSize = 12.sp,
+            modifier = Modifier.align(Alignment.CenterHorizontally).offset(y = (-8).dp),
+        )
 
         // ---------- szybkie akcje (jak Centrum sterowania) ----------
         Appear(120) {
@@ -183,10 +213,21 @@ fun DashboardScreen() {
                 Stat("KERS", t.kersLevel?.let { KERS_NAMES.getOrElse(it) { "$it" }.take(6) } ?: "–", Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Moc", t.powerW?.let { "${f0(it)} W" } ?: "–", Modifier.weight(1f), Ui.Accent)
                 Stat("Prąd", t.currentA?.let { "${f1(it)} A" } ?: "–", Modifier.weight(1f))
-                Stat("Bateria", t.batteryTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
-                Stat("Silnik", t.motorTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
+                Stat("Szczyt", if (peak.peakPowerW > 0) "${f0(peak.peakPowerW)} W" else "–", Modifier.weight(1f))
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("Napięcie", t.voltage?.let { "${f1(it)} V" } ?: "–", Modifier.weight(1f))
+                Stat("Temp. bat.", t.batteryTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
+                Stat("Temp. silnik", t.motorTempC?.let { "$it°" } ?: "–", Modifier.weight(1f))
+            }
+            Text(
+                "Moc = napięcie × prąd baterii z hulajnogi (te same dane co w Voltix). Koło w powietrzu " +
+                    "prawie nie stawia oporu, więc 50–100 W to normalny wynik; pod obciążeniem i przy ruszaniu " +
+                    "zobaczysz setki watów.",
+                color = Ui.Muted, fontSize = 11.sp,
+            )
         }
 
         // ---------- nagrywanie trasy ----------
@@ -213,6 +254,55 @@ fun DashboardScreen() {
     }
 
     if (showScan) ScanDialog(onDismiss = { scooter.stopScan(); showScan = false })
+    if (showHud) HudDialog(speed = speed, onClose = { showHud = false })
+}
+
+/**
+ * Tryb HUD: ogromna prędkość na czarnym tle. Lustrzane odbicie pozwala położyć telefon pod szybką/owiewką
+ * albo czytać go w odbiciu. Dotknij, żeby zamknąć.
+ */
+@Composable
+private fun HudDialog(speed: Double, onClose: () -> Unit) {
+    val app = App.instance
+    val t by app.scooter.telemetry.collectAsStateWithLifecycle()
+    var mirror by remember { mutableStateOf(app.prefs.hudMirror) }
+    val anim by androidx.compose.animation.core.animateFloatAsState(Ui.speed(speed).toFloat(), label = "hud")
+    val over = app.prefs.speedAlarmKmh > 0 && speed > app.prefs.speedAlarmKmh
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black).clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+            ) { onClose() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.graphicsLayer { scaleX = if (mirror) -1f else 1f },
+            ) {
+                Text(
+                    f0(anim.toDouble()), color = if (over) Ui.Danger else Ui.Accent,
+                    fontSize = 200.sp, fontWeight = FontWeight.Bold, letterSpacing = (-8).sp,
+                )
+                Text(Ui.speedUnit, color = Color.White, fontSize = 32.sp)
+                Spacer(Modifier.size(24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                    Text("${t.batteryPct}%", color = batteryColor(t.batteryPct), fontSize = 40.sp, fontWeight = FontWeight.SemiBold)
+                    t.speedMode?.let { MODE_NAMES.getOrNull(it) }?.let {
+                        Text(it.uppercase(), color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            Text(
+                if (mirror) "Lustro: WŁ" else "Lustro: WYŁ", color = Ui.Muted, fontSize = 15.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp)
+                    .bounceClick { mirror = !mirror; app.prefs.hudMirror = mirror },
+            )
+        }
+    }
 }
 
 fun batteryColor(p: Int): Color = when {

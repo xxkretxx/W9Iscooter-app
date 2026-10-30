@@ -63,6 +63,10 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     private val _deviceName = MutableStateFlow<String?>(null)
     val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
+    private val _alarm = MutableStateFlow(false)
+    /** Czy wyje alarm antykradzieżowy. */
+    val alarm: StateFlow<Boolean> = _alarm.asStateFlow()
+
     /** Ustawienia zapamiętane lokalnie (hulajnoga nie zawsze je raportuje). */
     private val _gear = MutableStateFlow(prefs.lastGear)
     val gear: StateFlow<Int> = _gear.asStateFlow()
@@ -347,6 +351,7 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
                 analytics.onTelemetry(_telemetry.value)
                 checkSpeedAlarm()
                 checkBattery()
+                checkTheft()
             }
             Voltix.METER2 -> _telemetry.update { it.withMeter2(f) }
             Voltix.QUERY_SPEED_LIMIT -> if (p.size >= 2) {
@@ -388,14 +393,48 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
         if (b > 25) lastBatteryAlert = 101
     }
 
+    private var theftArmedAt = 0L
+    private fun checkTheft() {
+        val t = _telemetry.value
+        if (!prefs.theftAlarm || !t.locked) {
+            if (_alarm.value) stopAlarm()
+            theftArmedAt = if (t.locked) theftArmedAt else 0L
+            return
+        }
+        // uzbrajamy po 3 s od zablokowania, żeby nie wyło przy samym zapięciu
+        if (theftArmedAt == 0L) theftArmedAt = System.currentTimeMillis()
+        if (System.currentTimeMillis() - theftArmedAt < 3000) return
+        // ruch zablokowanej hulajnogi = próba kradzieży
+        if (t.speedKmh > 0.5 && !_alarm.value) {
+            _alarm.value = true
+            Siren.maxVolume(ctx.getSystemService(android.media.AudioManager::class.java))
+            Siren.start()
+            val vib = ctx.getSystemService(Vibrator::class.java)
+            vib?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 400, 150, 400, 150, 400), 0))
+            pl.kret.w9.Notifications.show(ctx, 99, "Alarm!", "Ktoś rusza Twoją zablokowaną hulajnogą.")
+        }
+    }
+
+    fun stopAlarm() {
+        _alarm.value = false
+        theftArmedAt = System.currentTimeMillis()
+        Siren.stop()
+        ctx.getSystemService(Vibrator::class.java)?.cancel()
+    }
+
+    /** Profil = kilka komend; hulajnoga potrzebuje chwili między nimi (Voltix czeka na odpowiedź). */
     fun applyProfile(p: pl.kret.w9.RideProfile) {
-        setGear(p.gear)
-        setSpeedLimit(p.limitKmh)
-        setEBrake(p.kers)
-        setZeroStart(p.zeroStart)
+        if (_telemetry.value.speedKmh > 0.5) { addLog('•', "Profil ustawisz tylko na postoju"); return }
         prefs.kers = p.kers
         prefs.zeroStart = p.zeroStart
         addLog('•', "Profil: ${p.name}")
+        scope.launch {
+            setGear(p.gear); delay(700)
+            setSpeedLimit(p.limitKmh); delay(700)
+            setEBrake(p.kers); delay(700)
+            setZeroStart(p.zeroStart); delay(700)
+            send(Voltix.query(Voltix.QUERY_SPEED_LIMIT), null)
+        }
     }
 
     // ---------------- sterowanie ----------------
@@ -406,16 +445,46 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
         send(Voltix.build(Voltix.GEAR, 2, g, 0), "tryb $g")
     }
 
-    /** Voltix wysyła tę samą komendę do zablokowania i odblokowania (przełącznik). */
-    fun lock() = send(Voltix.build(Voltix.LOCK, 2, 0x00), "blokada (przełącz)")
-
-    fun unlock(pin: String?) {
-        val digits = pin?.takeIf { it.length == 4 && it.all(Char::isDigit) && _telemetry.value.lockHasPin }
-            ?.map { it.digitToInt() } ?: emptyList()
-        send(Voltix.build(Voltix.LOCK, 2, *(intArrayOf(0x00) + digits.toIntArray())), "odblokuj (przełącz)")
+    /*
+     * Blokada wg Voltix (cmd 0x32): typ 0 = odblokuj, 1 = zablokuj z PIN-em, 2 = blokada tymczasowa (bez PIN),
+     * 3 = usuń PIN. Po typie opcjonalnie 4 cyfry PIN-u.
+     */
+    private fun lockFrame(type: Int, pin: String?): ByteArray {
+        val digits = pin?.takeIf { it.length == 4 && it.all(Char::isDigit) }?.map { it.digitToInt() } ?: emptyList()
+        return Voltix.build(Voltix.LOCK, 2, *(intArrayOf(type) + digits.toIntArray()))
     }
 
-    fun toggleLock() = if (_telemetry.value.locked) unlock(prefs.pin) else { lock(); Unit }
+    /** Zablokuj: z PIN-em gdy podany (typ 1), inaczej blokada tymczasowa (typ 2). */
+    fun lock(pin: String? = null): Boolean {
+        if (_telemetry.value.speedKmh > 0.5) { addLog('•', "Zablokować można tylko na postoju"); return false }
+        val p = pin?.takeIf { it.length == 4 }
+        return if (p != null) send(lockFrame(1, p), "zablokuj z PIN") else send(lockFrame(2, null), "zablokuj")
+    }
+
+    fun unlock(pin: String?) {
+        val p = pin?.takeIf { it.length == 4 && _telemetry.value.lockHasPin }
+        send(lockFrame(0, p), "odblokuj")
+    }
+
+    fun clearLockPin(pin: String) = send(lockFrame(3, pin), "usuń PIN blokady")
+
+    /**
+     * Podświetlenie otoczenia RGB (cmd 0x33, pierwszy bajt 02).
+     * Tryby 0–1: jeden kolor; tryby 2–3: efekt z kilkoma kolorami. Jasność 0–100.
+     */
+    fun setAmbient(mode: Int, brightness: Int, colors: List<Int>): Boolean {
+        val b = brightness.coerceIn(0, 100)
+        val rgb = colors.flatMap { listOf((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
+        val frame = if (mode <= 1 && colors.isNotEmpty()) {
+            Voltix.build(Voltix.LIGHT, 2, 2, b, mode, 1, rgb[0], rgb[1], rgb[2])
+        } else {
+            val list = if (mode <= 1) emptyList() else rgb.take(9)
+            Voltix.build(Voltix.LIGHT, 2, *(intArrayOf(2, b, mode, list.size / 3) + list.toIntArray()))
+        }
+        return send(frame, "podświetlenie tryb $mode, ${b}%")
+    }
+
+    fun toggleLock() = if (_telemetry.value.locked) unlock(prefs.pin) else { lock(prefs.pin.takeIf { prefs.lockWithPin }); Unit }
 
     /** Przednie światło: [00 FA 00 00 00 00] = ON, same zera = OFF (jak w Voltix). */
     fun setLight(on: Boolean) =
@@ -427,10 +496,16 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     /** Limit prędkości (km/h) – hulajnoga przyjmuje go tylko na postoju i w zakresie min–max. */
     fun setSpeedLimit(kmh: Int): Boolean {
         val t = _telemetry.value
-        val v = kmh.coerceIn(t.limitMin ?: 1, t.limitMax ?: 99)
+        // hulajnoga liczy limit w jednostce ustawionej na wyświetlaczu
+        val unitVal = if (t.mphUnit) Math.round(kmh * 0.621371).toInt() else kmh
+        val v = unitVal.coerceIn(t.limitMin ?: 1, t.limitMax ?: 99)
+        if (v != unitVal) addLog('•', "Hulajnoga przyjmuje limit ${t.limitMin}–${t.limitMax} – ustawiam $v")
         if (t.speedKmh > 0.5) addLog('•', "Limit zmienisz tylko na postoju")
-        return send(Voltix.build(Voltix.SPEED_LIMIT, 2, v), "limit $v km/h")
+        return send(Voltix.build(Voltix.SPEED_LIMIT, 2, v), "limit $v ${if (t.mphUnit) "mph" else "km/h"}")
     }
+
+    /** Jasność wyświetlacza (cmd 0x34). Aktualną wartość hulajnoga podaje w ramce 0x21. */
+    fun setBrightness(level: Int) = send(Voltix.build(Voltix.GAUGE_BRIGHTNESS, 2, level.coerceIn(0, 100)), "jasność wyświetlacza $level")
 
     fun setUnit(mph: Boolean) = send(Voltix.build(Voltix.UNIT, 2, if (mph) 1 else 0), "jednostka ${if (mph) "mph" else "km/h"}")
 

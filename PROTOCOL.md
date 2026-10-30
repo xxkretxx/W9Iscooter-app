@@ -14,8 +14,10 @@ PARAM: 1 = zapytanie, 2 = ustawienie.
 ## Komendy (PARAM = 2)
 | CMD | Payload | Znaczenie |
 |---|---|---|
-| 0x32 | `[00]` / `[00 d1 d2 d3 d4]` | blokada – przełącznik (z PIN-em gdy ustawiony) |
+| 0x32 | `[typ (d1 d2 d3 d4)]` | blokada: typ 0 odblokuj, 1 zablokuj z PIN, 2 blokada tymczasowa, 3 usuń PIN |
 | 0x33 | `[00 FA 00 00 00 00]` / `[00×6]` | przednie światło ON / OFF |
+| 0x33 | `[02 jasność tryb 01 R G B]` | podświetlenie RGB, tryb 0–1 (jeden kolor) |
+| 0x33 | `[02 jasność tryb n RGB×n]` | podświetlenie RGB, tryb 2–3 (do 3 kolorów) |
 | 0x35 | `[tryb, 00]` | tryb: 0 spacer, 1 eko, 2 normal, 3 sport (4,5 sport2/3) |
 | 0x36 | `[km/h]` | limit prędkości (zakres z 0x62), tylko na postoju |
 | 0x37 | `[0..3]` | KERS: 0 adaptacyjny, 1 słaby, 2 średni, 3 mocny |

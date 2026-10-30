@@ -66,6 +66,10 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
     var bmsPoll by remember { mutableStateOf(p.bmsPoll) }
     var batAlerts by remember { mutableStateOf(p.batteryAlerts) }
     var autoLight by remember { mutableStateOf(p.autoLight) }
+    var appLock by remember { mutableStateOf(p.appLock) }
+    var theft by remember { mutableStateOf(p.theftAlarm) }
+    var autoRec by remember { mutableStateOf(p.autoRecord) }
+    val act = LocalContext.current as? pl.kret.w9.MainActivity
     val trips by app.trips.trips.collectAsStateWithLifecycle()
     val totalKm = trips.sumOf { it.distanceM } / 1000
     var svcTick by remember { mutableIntStateOf(0) }
@@ -80,7 +84,26 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
             PillButton("Zapomnij hulajnogę", Modifier.fillMaxWidth(), color = Ui.Card2, textColor = Ui.Danger) { app.scooter.forget() }
         }
 
+        Panel(title = "Prywatność") {
+            SwitchRow(
+                "Blokada aplikacji", appLock,
+                if (act?.canUseAppLock() == false) "ustaw blokadę ekranu w telefonie, aby włączyć"
+                else "odcisk palca, twarz lub PIN telefonu przy otwarciu",
+            ) { on ->
+                if (on && act?.canUseAppLock() == false) return@SwitchRow
+                if (on) act?.authenticate { appLock = true; p.appLock = true }
+                else act?.authenticate { appLock = false; p.appLock = false }
+            }
+        }
+
         Panel(title = "Inteligentne funkcje") {
+            SwitchRow(
+                "Alarm antykradzieżowy", theft,
+                "gdy hulajnoga jest zablokowana i ktoś nią ruszy – syrena w telefonie + powiadomienie (telefon musi być w zasięgu Bluetooth)",
+            ) { theft = it; p.theftAlarm = it; if (!it) app.scooter.stopAlarm() }
+            SwitchRow("Auto-nagrywanie tras", autoRec, "start gdy ruszysz (> 5 km/h), koniec po 3 min postoju") {
+                autoRec = it; p.autoRecord = it
+            }
             SwitchRow("Auto-światło", autoLight,
                 if (app.autoLight.available) "włącza światło po zmroku (czujnik światła telefonu)" else "brak czujnika światła w telefonie") {
                 autoLight = it; p.autoLight = it; app.autoLight.update()

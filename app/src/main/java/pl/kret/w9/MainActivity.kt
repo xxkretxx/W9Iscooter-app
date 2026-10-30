@@ -4,7 +4,15 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import pl.kret.w9.ui.PillButton
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -59,7 +67,11 @@ import pl.kret.w9.ui.TripsScreen
 import pl.kret.w9.ui.Ui
 import pl.kret.w9.ui.W9Theme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+
+    /** Czy aplikacja jest odblokowana (blokada odciskiem palca / PIN-em telefonu). */
+    private val unlocked = mutableStateOf(!App.instance.prefs.appLock)
+    private var backgroundAt = 0L
 
     private val permLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         App.instance.scooter.reconnectLast()
@@ -80,6 +92,7 @@ class MainActivity : ComponentActivity() {
                     "Trasy" to Icons.Rounded.Map,
                     "Więcej" to Icons.Rounded.MoreHoriz,
                 )
+                Box(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxSize().background(Ui.Bg).systemBarsPadding()) {
                     AnimatedContent(
                         targetState = tab,
@@ -102,6 +115,8 @@ class MainActivity : ComponentActivity() {
                     }
                     IosTabBar(tabs, tab) { tab = it }
                 }
+                if (!unlocked.value) LockScreen { authenticate() }
+                }
             }
         }
     }
@@ -109,6 +124,40 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         App.instance.scooter.reconnectLast()
+        val p = App.instance.prefs
+        // ponowna blokada po 30 s w tle
+        if (p.appLock && backgroundAt > 0 && System.currentTimeMillis() - backgroundAt > 30_000) unlocked.value = false
+        if (p.appLock && !unlocked.value) authenticate()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        backgroundAt = System.currentTimeMillis()
+    }
+
+    fun canUseAppLock(): Boolean =
+        BiometricManager.from(this).canAuthenticate(AUTH) == BiometricManager.BIOMETRIC_SUCCESS
+
+    /** Prosi o odcisk palca / twarz / PIN telefonu. onOk wywoływane po sukcesie. */
+    fun authenticate(onOk: () -> Unit = {}) {
+        if (!canUseAppLock()) { unlocked.value = true; onOk(); return }
+        val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                unlocked.value = true
+                onOk()
+            }
+        })
+        prompt.authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle("W9 Scooter")
+                .setSubtitle("Odblokuj aplikację")
+                .setAllowedAuthenticators(AUTH)
+                .build(),
+        )
+    }
+
+    companion object {
+        const val AUTH = BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
     }
 
     private fun applyKeepScreenOn() {
@@ -148,5 +197,23 @@ private fun IosTabBar(tabs: List<Pair<String, ImageVector>>, selected: Int, onSe
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LockScreen(onUnlock: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(Ui.Bg).clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null,
+        ) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Rounded.Lock, null, tint = Color.White, modifier = Modifier.size(64.dp))
+        Spacer(Modifier.size(16.dp))
+        Text("W9 Scooter", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Aplikacja zablokowana", color = Ui.Muted, fontSize = 15.sp)
+        Spacer(Modifier.size(32.dp))
+        PillButton("Odblokuj", Modifier.padding(horizontal = 48.dp).fillMaxWidth()) { onUnlock() }
     }
 }

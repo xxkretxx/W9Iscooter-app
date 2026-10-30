@@ -124,7 +124,8 @@ class TripRecorder(
         last = null
         _live.value = LiveTrip(start = System.currentTimeMillis(), batteryStart = currentBattery())
         _recording.value = true
-        ContextCompat.startForegroundService(ctx, Intent(ctx, RideService::class.java))
+        // w tle Android 12+ może nie pozwolić na usługę – wtedy nagrywamy dopóki aplikacja żyje
+        try { ContextCompat.startForegroundService(ctx, Intent(ctx, RideService::class.java)) } catch (_: Exception) {}
         try {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 2f, listener, Looper.getMainLooper())
         } catch (e: Exception) {
