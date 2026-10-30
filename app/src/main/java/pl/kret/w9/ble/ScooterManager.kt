@@ -63,10 +63,6 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     private val _deviceName = MutableStateFlow<String?>(null)
     val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
-    private val _alarm = MutableStateFlow(false)
-    /** Czy wyje alarm antykradzieżowy. */
-    val alarm: StateFlow<Boolean> = _alarm.asStateFlow()
-
     /** Ustawienia zapamiętane lokalnie (hulajnoga nie zawsze je raportuje). */
     private val _gear = MutableStateFlow(prefs.lastGear)
     val gear: StateFlow<Int> = _gear.asStateFlow()
@@ -351,7 +347,6 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
                 analytics.onTelemetry(_telemetry.value)
                 checkSpeedAlarm()
                 checkBattery()
-                checkTheft()
             }
             Voltix.METER2 -> _telemetry.update { it.withMeter2(f) }
             Voltix.QUERY_SPEED_LIMIT -> if (p.size >= 2) {
@@ -393,35 +388,6 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
         if (b > 25) lastBatteryAlert = 101
     }
 
-    private var theftArmedAt = 0L
-    private fun checkTheft() {
-        val t = _telemetry.value
-        if (!prefs.theftAlarm || !t.locked) {
-            if (_alarm.value) stopAlarm()
-            theftArmedAt = if (t.locked) theftArmedAt else 0L
-            return
-        }
-        // uzbrajamy po 3 s od zablokowania, żeby nie wyło przy samym zapięciu
-        if (theftArmedAt == 0L) theftArmedAt = System.currentTimeMillis()
-        if (System.currentTimeMillis() - theftArmedAt < 3000) return
-        // ruch zablokowanej hulajnogi = próba kradzieży
-        if (t.speedKmh > 0.5 && !_alarm.value) {
-            _alarm.value = true
-            pl.kret.w9.Siren.maxVolume(ctx.getSystemService(android.media.AudioManager::class.java))
-            pl.kret.w9.Siren.start()
-            val vib = ctx.getSystemService(Vibrator::class.java)
-            vib?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 400, 150, 400, 150, 400), 0))
-            pl.kret.w9.Notifications.show(ctx, 99, "Alarm!", "Ktoś rusza Twoją zablokowaną hulajnogą.")
-        }
-    }
-
-    fun stopAlarm() {
-        _alarm.value = false
-        theftArmedAt = System.currentTimeMillis()
-        pl.kret.w9.Siren.stop()
-        ctx.getSystemService(Vibrator::class.java)?.cancel()
-    }
-
     /** Profil = kilka komend; hulajnoga potrzebuje chwili między nimi (Voltix czeka na odpowiedź). */
     fun applyProfile(p: pl.kret.w9.RideProfile) {
         if (_telemetry.value.speedKmh > 0.5) { addLog('•', "Profil ustawisz tylko na postoju"); return }
@@ -431,8 +397,7 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
         scope.launch {
             setGear(p.gear); delay(700)
             setSpeedLimit(p.limitKmh); delay(700)
-            setEBrake(p.kers); delay(700)
-            setZeroStart(p.zeroStart); delay(700)
+            if (_telemetry.value.zeroStart != p.zeroStart) { setZeroStart(p.zeroStart); delay(700) }
             send(Voltix.query(Voltix.QUERY_SPEED_LIMIT), null)
         }
     }
@@ -511,7 +476,8 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
 
     /** Rekuperacja: 0 adaptacyjna, 1 słaba, 2 średnia, 3 mocna. */
     fun setEBrake(level: Int) = send(Voltix.build(Voltix.E_BRAKE, 2, level.coerceIn(0, 3)), "KERS $level")
-    fun setZeroStart(on: Boolean) = send(Voltix.build(Voltix.START_MODE, 2, if (on) 1 else 0, 0), "start od zera ${if (on) "ON" else "OFF"}")
+    /** Jak w Voltix: [00 00] włącza start od zera, [01 00] wyłącza (ruszanie z odepchnięciem). */
+    fun setZeroStart(on: Boolean) = send(Voltix.build(Voltix.START_MODE, 2, if (on) 0 else 1, 0), "start od zera ${if (on) "ON" else "OFF"}")
     fun setSmartLock(on: Boolean) = send(Voltix.build(Voltix.SMART_LOCK, 2, if (on) 1 else 0), "smart lock ${if (on) "ON" else "OFF"}")
     /** Napęd: 0 = jeden silnik, 1 = dwa silniki (tylko modele 2×silnik). */
     fun setDriveMode(mode: Int) = send(Voltix.build(Voltix.DRIVE_MODE, 2, mode), "napęd $mode")

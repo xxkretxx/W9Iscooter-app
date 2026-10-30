@@ -162,10 +162,11 @@ class Prefs(ctx: Context) {
 
 data class RideProfile(val name: String, val gear: Int, val limitKmh: Int, val kers: Int, val zeroStart: Boolean) {
     companion object {
+        /** Najdłuższy zasięg: ECO, max 20 km/h, ruszanie z odepchnięciem. */
+        val LONG_RANGE = RideProfile("Long Range", 1, 20, 0, false)
         val PRESETS = listOf(
-            RideProfile("Eko", 1, 20, 3, false),
-            RideProfile("Miasto", 2, 25, 2, false),
-            RideProfile("Sport", 3, 45, 1, true),
+            RideProfile("Miasto", 2, 25, 0, true),
+            RideProfile("TURBO", 3, 45, 0, true),
         )
     }
 }

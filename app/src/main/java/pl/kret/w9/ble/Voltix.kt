@@ -186,6 +186,8 @@ data class Telemetry(
     val headlightOn get() = lightFlags and 0x10 != 0
     val lightOn get() = headlightOn
     val rearLightOn get() = lightFlags and 0x08 != 0
+    val rightTurn get() = lightFlags and 0x02 != 0
+    val leftTurn get() = lightFlags and 0x04 != 0
     val lowPower get() = statusFlags and 0x01 != 0
     val braking get() = statusFlags and 0x08 != 0
     val lockHasPin get() = statusFlags and 0x10 != 0
@@ -193,7 +195,8 @@ data class Telemetry(
     val cruiseActive get() = statusFlags and 0x40 != 0
     val charging get() = statusFlags and 0x80 != 0
     val cruiseOn get() = status3 and 0x40 != 0
-    val zeroStart get() = status3 and 0x80 != 0
+    /** W9/Voltix: bit7 = 1 oznacza ruszanie z odepchnięciem, więc start od zera = bit7 == 0. */
+    val zeroStart get() = status3 and 0x80 == 0
     val smartLock get() = status3 and 0x20 != 0
     val tempC: Double? get() = (motorTempC ?: batteryTempC)?.toDouble()
     val powerW: Double? get() = if (voltage != null && currentA != null) voltage * currentA else null

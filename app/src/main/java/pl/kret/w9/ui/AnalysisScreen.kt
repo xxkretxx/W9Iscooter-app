@@ -61,8 +61,9 @@ fun AnalysisScreen() {
             targetState = tab,
             transitionSpec = {
                 val dir = if (targetState > initialState) 1 else -1
-                (androidx.compose.animation.slideInHorizontally { it / 4 * dir } + androidx.compose.animation.fadeIn()) togetherWith
-                    (androidx.compose.animation.slideOutHorizontally { -it / 4 * dir } + androidx.compose.animation.fadeOut())
+                val sp = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(200, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                (androidx.compose.animation.slideInHorizontally(sp) { it / 6 * dir } + androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180))) togetherWith
+                    (androidx.compose.animation.slideOutHorizontally(sp) { -it / 6 * dir } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120)))
             },
             label = "anTab",
         ) { tb ->
@@ -98,13 +99,16 @@ private fun ChartsTab() {
         Panel(title = "Sesja (od uruchomienia / resetu)") {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Zużyte", "${f1(st.energyWh)} Wh", Modifier.weight(1f))
-                Stat("Odzyskane", "${f1(st.regenWh)} Wh", Modifier.weight(1f), Ui.Accent)
+                val tel by App.instance.scooter.telemetry.collectAsStateWithLifecycle()
+                // zasięg z rzeczywistego zużycia: energia w baterii / Wh na km
+                val rangeKm = st.whPerKm?.takeIf { it > 1 }?.let { tel.batteryPct / 100.0 * App.instance.prefs.batteryWh / it }
+                Stat("Zostało", rangeKm?.let { "${f0(Ui.dist(it))} ${Ui.distUnit}" } ?: "–", Modifier.weight(1f), Ui.Accent)
                 Stat("Wh/km", st.whPerKm?.let { f1(it) } ?: "–", Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Szczyt mocy", "${f0(st.peakPowerW)} W", Modifier.weight(1f))
                 Stat("Szczyt prądu", "${f1(st.peakCurrentA)} A", Modifier.weight(1f))
-                Stat("Max regen", "${f1(st.peakRegenA)} A", Modifier.weight(1f))
+                Stat("Czas sesji", duration((System.currentTimeMillis() - st.start) / 1000), Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Dystans", "${f1(Ui.dist(st.distanceKm))} ${Ui.distUnit}", Modifier.weight(1f))

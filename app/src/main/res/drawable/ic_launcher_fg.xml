@@ -1,16 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Prosta ikona: błyskawica w okręgu -->
+<!-- Biała sylwetka hulajnogi terenowej (bezpieczna strefa 66 dp w środku) -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:strokeColor="#00E0A4"
-        android:strokeWidth="4"
-        android:fillColor="#00000000"
-        android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z" />
-    <path
-        android:fillColor="#00E0A4"
-        android:pathData="M58,34 L42,58 L52,58 L48,74 L66,48 L56,48 Z" />
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="1.12" android:scaleY="1.12"
+        android:translateX="-2" android:translateY="-2">
+    <!-- koła -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.5" android:fillColor="#00000000"
+        android:pathData="M38,70m-8.5,0a8.5,8.5 0,1 1,17 0a8.5,8.5 0,1 1,-17 0" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.5" android:fillColor="#00000000"
+        android:pathData="M74,70m-8.5,0a8.5,8.5 0,1 1,17 0a8.5,8.5 0,1 1,-17 0" />
+    <!-- piasty -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M38,70m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M74,70m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
+    <!-- deck + wahacz -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M38,70 L44,61 L66,61" />
+    <!-- kolumna i widelec -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.5" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M74,70 L64,33" />
+    <!-- kierownica -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.5" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M56,33 L72,33" />
+    </group>
 </vector>

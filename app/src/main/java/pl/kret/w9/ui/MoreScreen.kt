@@ -67,7 +67,6 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
     var batAlerts by remember { mutableStateOf(p.batteryAlerts) }
     var autoLight by remember { mutableStateOf(p.autoLight) }
     var appLock by remember { mutableStateOf(p.appLock) }
-    var theft by remember { mutableStateOf(p.theftAlarm) }
     var autoRec by remember { mutableStateOf(p.autoRecord) }
     val act = LocalContext.current as? pl.kret.w9.MainActivity
     val trips by app.trips.trips.collectAsStateWithLifecycle()
@@ -97,10 +96,6 @@ private fun SettingsTab(onKeepScreenChanged: () -> Unit) {
         }
 
         Panel(title = "Inteligentne funkcje") {
-            SwitchRow(
-                "Alarm antykradzieżowy", theft,
-                "gdy hulajnoga jest zablokowana i ktoś nią ruszy – syrena w telefonie + powiadomienie (telefon musi być w zasięgu Bluetooth)",
-            ) { theft = it; p.theftAlarm = it; if (!it) app.scooter.stopAlarm() }
             SwitchRow("Auto-nagrywanie tras", autoRec, "start gdy ruszysz (> 5 km/h), koniec po 3 min postoju") {
                 autoRec = it; p.autoRecord = it
             }

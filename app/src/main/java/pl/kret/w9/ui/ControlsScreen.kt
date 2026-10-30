@@ -37,13 +37,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.togetherWith
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import pl.kret.w9.App
 import pl.kret.w9.RideProfile
 import pl.kret.w9.ble.ConnState
 
-val MODE_NAMES = listOf("Spacer", "Eko", "Normal", "Sport", "Sport+", "Sport++")
-val KERS_NAMES = listOf("Adaptacyjny", "Słaby", "Średni", "Mocny")
+/** Nazwy trybów jak na wyświetlaczu W9 (ECO / STD / TURBO). */
+val MODE_NAMES = listOf("Spacer", "ECO", "STD", "TURBO", "TURBO+", "TURBO++")
 
 @Composable
 fun ControlsScreen() {
@@ -51,7 +52,6 @@ fun ControlsScreen() {
     val s = app.scooter
     val state by s.state.collectAsStateWithLifecycle()
     val t by s.telemetry.collectAsStateWithLifecycle()
-    val stats by s.analytics.stats.collectAsStateWithLifecycle()
     val connected = state == ConnState.CONNECTED
     val moving = t.speedKmh > 0.5
 
@@ -73,30 +73,49 @@ fun ControlsScreen() {
         if (!connected) Text("Połącz się z hulajnogą na zakładce Licznik.", color = Ui.Warn)
         if (moving) Text("Tryb, limit i blokadę hulajnoga zmienia tylko na postoju.", color = Ui.Warn, fontSize = 13.sp)
 
-        Panel(title = "Profile jazdy (tryb + limit + KERS + start)") {
+        // ---------- Long Range ----------
+        Appear {
+            val lr = RideProfile.LONG_RANGE
+            val lrOn = t.speedMode == lr.gear && t.speedLimitKmh == lr.limitKmh
+            val bg by androidx.compose.animation.animateColorAsState(if (lrOn) Ui.Accent else Ui.Card, label = "lr")
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(bg)
+                    .bounceClick(enabled = !moving) { s.applyProfile(lr); limit = lr.limitKmh.toFloat() }
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("🍃  LONG RANGE", color = if (lrOn) Color.Black else Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text(if (lrOn) "Włączony" else "Najdłuższy zasięg", color = if (lrOn) Color.Black else Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "ECO + limit 20 km/h + ruszanie z odepchnięciem. Przy stałych 20 km/h W9 zużywa najmniej energii na kilometr.",
+                    color = if (lrOn) Color.Black.copy(alpha = 0.7f) else Ui.Muted, fontSize = 13.sp,
+                )
+            }
+        }
+
+        Panel(title = "Profile jazdy") {
             val profiles = RideProfile.PRESETS + app.prefs.customProfile
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 profiles.forEach { pr ->
-                    val active = t.speedMode == pr.gear && t.speedLimitKmh == pr.limitKmh && t.kersLevel == pr.kers
+                    val active = t.speedMode == pr.gear && t.speedLimitKmh == pr.limitKmh && t.zeroStart == pr.zeroStart
                     val bg by androidx.compose.animation.animateColorAsState(if (active) Ui.Accent else Ui.Card2, label = "prof")
                     androidx.compose.foundation.layout.Box(
                         Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(12.dp)).background(bg)
-                            .bounceClick { s.applyProfile(pr); limit = pr.limitKmh.toFloat() },
+                            .bounceClick(enabled = !moving) { s.applyProfile(pr); limit = pr.limitKmh.toFloat() },
                         contentAlignment = androidx.compose.ui.Alignment.Center,
                     ) { Text(pr.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (active) Color.Black else Color.White) }
                 }
             }
             Text(
                 profiles.joinToString("\n") { pr ->
-                    "${pr.name}: ${MODE_NAMES.getOrNull(pr.gear) ?: pr.gear}, ${pr.limitKmh} km/h, KERS ${KERS_NAMES.getOrNull(pr.kers) ?: pr.kers}" +
-                        if (pr.zeroStart) ", zero start" else ""
+                    "${pr.name}: ${MODE_NAMES.getOrNull(pr.gear) ?: pr.gear}, ${pr.limitKmh} km/h" + if (pr.zeroStart) ", start od zera" else ""
                 },
                 color = Ui.Muted, fontSize = 11.sp,
             )
             Text(
                 "Zapisz obecne ustawienia jako „Własny”", color = Ui.Blue, fontSize = 15.sp,
                 modifier = Modifier.bounceClick {
-                    app.prefs.customProfile = RideProfile("Własny", t.speedMode ?: 2, limit.toInt(), t.kersLevel ?: 0, t.zeroStart)
+                    app.prefs.customProfile = RideProfile("Własny", t.speedMode ?: 2, limit.toInt(), 0, t.zeroStart)
                 },
             )
         }
@@ -140,24 +159,6 @@ fun ControlsScreen() {
                     modifier = Modifier.bounceClick { s.clearLockPin(pin) },
                 )
             }
-            SwitchRow("Smart lock", t.smartLock, "automatyczna blokada po oddaleniu się") { s.setSmartLock(it) }
-        }
-
-        Panel(title = "Przyspieszenie") {
-            val accel = when (t.speedMode) { 1 -> 0; 2 -> 1; 3, 4, 5 -> 2; else -> -1 }
-            Segmented(listOf("Łagodne", "Normalne", "Gwałtowne"), accel) { i ->
-                s.setGear(listOf(1, 2, 3)[i])
-                if (i == 2 && !t.zeroStart) s.setZeroStart(true)
-            }
-            Text(
-                "Sterownik W9 nie ma osobnej regulacji przyspieszenia przez Bluetooth (Voltix też jej nie ma). " +
-                    "Dynamikę ruszania zmienia tryb jazdy: „Gwałtowne” = Sport + start od zera. Zmiana tylko na postoju.",
-                color = Ui.Muted, fontSize = 12.sp,
-            )
-        }
-
-        Panel(title = "Podświetlenie RGB") {
-            AmbientPanel()
         }
 
         Panel(title = "Światła i jazda") {
@@ -197,30 +198,27 @@ fun ControlsScreen() {
             )
         }
 
-        Panel(title = "Rekuperacja (KERS): ${KERS_NAMES.getOrElse(t.kersLevel ?: -1) { "–" }}") {
-            Segmented(KERS_NAMES.map { it.take(6) }, t.kersLevel ?: -1) { app.prefs.kers = it; s.setEBrake(it) }
-            Text(
-                when (t.kersLevel) {
-                    0 -> "Adaptacyjny – sterownik sam dobiera siłę hamowania silnikiem."
-                    1 -> "Słaby – hulajnoga toczy się swobodnie po puszczeniu gazu."
-                    2 -> "Średni – dobry kompromis do miasta."
-                    3 -> "Mocny – najwięcej odzysku i mniejsze zużycie klocków; uważaj na mokrym."
-                    else -> "Wybierz poziom."
-                },
-                color = Ui.Muted, fontSize = 12.sp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Stat("Odzyskano", "${f1(stats.regenWh)} Wh", Modifier.weight(1f), Ui.Accent)
-                Stat("Max prąd regen.", "${f1(stats.peakRegenA)} A", Modifier.weight(1f))
-                Stat("Odzysk", if (stats.energyWh > 1) "${f0(stats.regenWh / stats.energyWh * 100)}%" else "–", Modifier.weight(1f))
-            }
-            Text("Porównaj % odzysku na tej samej trasie przy różnych poziomach.", color = Ui.Muted, fontSize = 11.sp)
-        }
-
         Panel(title = "Jasność wyświetlacza") {
-            val cur = t.gaugeBrightness
-            Segmented(listOf("1", "2", "3", "4", "5"), (cur ?: 0) - 1) { s.setBrightness(it + 1) }
-            Text("Aktualnie: ${cur ?: "–"} (wartość z hulajnogi)", color = Ui.Muted, fontSize = 12.sp)
+            var sel by remember { mutableStateOf(-1) }
+            var sentAt by remember { mutableStateOf(0L) }
+            Segmented(listOf("1", "2", "3", "4", "5"), sel) {
+                sel = it; sentAt = System.currentTimeMillis(); s.setBrightness(it + 1)
+            }
+            // potwierdzenie, że kliknięcie poszło do hulajnogi
+            androidx.compose.animation.AnimatedContent(
+                targetState = sentAt,
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)) +
+                        androidx.compose.animation.scaleIn(androidx.compose.animation.core.tween(150), initialScale = 0.9f)) togetherWith
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))
+                },
+                label = "brightOk",
+            ) { at ->
+                Text(
+                    if (at == 0L) "Wybierz poziom jasności" else "✓ Wysłano: jasność ${sel + 1}",
+                    color = if (at == 0L) Ui.Muted else Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
 
         Panel(title = "Jednostki na wyświetlaczu") {
@@ -238,66 +236,4 @@ fun ControlsScreen() {
             t.odometerKm?.let { Text("Przebieg całkowity: ${f0(it)} km", color = Ui.Muted) }
         }
     }
-}
-
-private val AMBIENT_COLORS = listOf(
-    0xFF3B30, 0xFF9500, 0xFFCC00, 0x34C759, 0x00E0A4, 0x5AC8FA, 0x007AFF, 0x5856D6, 0xAF52DE, 0xFF2D55, 0xFFFFFF,
-)
-
-/** Podświetlenie otoczenia: tryb, jasność i kolory (tryby 3–4 przyjmują do 3 kolorów). */
-@Composable
-private fun AmbientPanel() {
-    val app = App.instance
-    val s = app.scooter
-    var mode by remember { mutableStateOf(app.prefs.ambientMode) }
-    var bright by remember { mutableFloatStateOf(app.prefs.ambientBrightness.toFloat()) }
-    var colors by remember { mutableStateOf(app.prefs.ambientColors) }
-    val multi = mode >= 2
-
-    Segmented(listOf("Stały", "Efekt 1", "Efekt 2", "Efekt 3"), mode) {
-        mode = it
-        if (it < 2 && colors.size > 1) colors = colors.take(1)
-    }
-    Text(if (multi) "Wybierz do 3 kolorów" else "Wybierz kolor", color = Ui.Muted, fontSize = 13.sp)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        AMBIENT_COLORS.take(6).forEach { c -> ColorDot(c, c in colors) { colors = toggleColor(colors, c, multi) } }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        AMBIENT_COLORS.drop(6).forEach { c -> ColorDot(c, c in colors) { colors = toggleColor(colors, c, multi) } }
-    }
-    Text("Jasność ${bright.toInt()}%", color = Color.White, fontSize = 15.sp)
-    Slider(
-        value = bright, onValueChange = { bright = it }, valueRange = 0f..100f,
-        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Ui.Accent, inactiveTrackColor = Ui.Track),
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        PillButton("Ustaw", Modifier.weight(1f)) {
-            app.prefs.ambientMode = mode
-            app.prefs.ambientBrightness = bright.toInt()
-            app.prefs.ambientColors = colors
-            s.setAmbient(mode, bright.toInt(), colors)
-        }
-        PillButton("Wyłącz", Modifier.weight(1f), color = Ui.Card2, textColor = Color.White) {
-            s.setAmbient(mode, 0, colors)
-        }
-    }
-    Text("Polecenia jak w Voltix (ekran „Tryb świateł”). Nazwy efektów zależą od sterownika – wypróbuj każdy.", color = Ui.Muted, fontSize = 11.sp)
-}
-
-private fun toggleColor(list: List<Int>, c: Int, multi: Boolean): List<Int> =
-    if (!multi) listOf(c)
-    else if (c in list) list - c
-    else (list + c).takeLast(3)
-
-@Composable
-private fun RowScope.ColorDot(rgb: Int, selected: Boolean, onClick: () -> Unit) {
-    val ring by androidx.compose.animation.core.animateDpAsState(if (selected) 3.dp else 0.dp, label = "ring")
-    androidx.compose.foundation.layout.Box(
-        Modifier.weight(1f).aspectRatio(1f).clip(androidx.compose.foundation.shape.CircleShape)
-            .background(if (selected) Color.White else Color.Transparent)
-            .padding(ring)
-            .clip(androidx.compose.foundation.shape.CircleShape)
-            .background(Color(0xFF000000 or rgb.toLong()))
-            .bounceClick { onClick() },
-    )
 }

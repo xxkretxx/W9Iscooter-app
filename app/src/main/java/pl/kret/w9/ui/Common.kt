@@ -158,8 +158,8 @@ fun Appear(delayMs: Int = 0, content: @Composable () -> Unit) {
     LaunchedEffect(Unit) { if (delayMs > 0) delay(delayMs.toLong()); shown = true }
     AnimatedVisibility(
         visible = shown,
-        enter = fadeIn(tween(380, easing = FastOutSlowInEasing)) +
-            slideInVertically(spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessLow)) { it / 5 },
+        enter = fadeIn(tween(220, easing = FastOutSlowInEasing)) +
+            slideInVertically(spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)) { it / 8 },
     ) { content() }
 }
 

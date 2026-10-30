@@ -80,7 +80,6 @@ fun DashboardScreen() {
     val live by app.recorder.live.collectAsStateWithLifecycle()
     var showScan by remember { mutableStateOf(false) }
     var showHud by remember { mutableStateOf(false) }
-    val alarm by scooter.alarm.collectAsStateWithLifecycle()
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(recording) { while (recording) { now = System.currentTimeMillis(); delay(1000) } }
 
@@ -132,33 +131,40 @@ fun DashboardScreen() {
             )
         }
 
-        // ---------- alarm ----------
-        if (alarm) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Ui.Danger)
-                    .bounceClick { scooter.stopAlarm() }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("ALARM!", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text("Ktoś rusza zablokowaną hulajnogą", color = Color.White, fontSize = 14.sp)
+        // ---------- model hulajnogi → licznik po ruszeniu ----------
+        var riding by remember { mutableStateOf(false) }
+        val moving = speed > 1.5
+        LaunchedEffect(moving) {
+            if (moving) riding = true else { delay(4000); riding = false } // chwila zwłoki na światłach
+        }
+        Appear(60) {
+            AnimatedContent(
+                targetState = riding,
+                transitionSpec = {
+                    (fadeIn(tween(350)) + androidx.compose.animation.scaleIn(tween(450), initialScale = if (targetState) 0.8f else 1.15f)) togetherWith
+                        (fadeOut(tween(220)) + androidx.compose.animation.scaleOut(tween(320), targetScale = if (targetState) 1.2f else 0.85f))
+                },
+                label = "hero",
+            ) { r ->
+                if (r) {
+                    Speedometer(
+                        kmh = speed, maxKmh = maxOf(50.0, ((t.limitMax ?: 45) + 5).toDouble()),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).bounceClick { showHud = true },
+                        label = t.speedMode?.let { MODE_NAMES.getOrNull(it) }?.takeIf { connected },
+                    )
+                } else {
+                    Scooter3D(
+                        headlight = t.headlightOn, braking = t.braking,
+                        leftTurn = t.leftTurn, rightTurn = t.rightTurn, connected = connected,
+                        modifier = Modifier.fillMaxWidth().bounceClick { showHud = true },
+                    )
                 }
-                Text("Wycisz", color = Ui.Danger, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clip(CircleShape).background(Color.White).padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }
-
-        // ---------- prędkościomierz ----------
-        Appear(60) {
-            Speedometer(
-                kmh = speed, maxKmh = maxOf(50.0, ((t.limitMax ?: 45) + 5).toDouble()),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).bounceClick { showHud = true },
-                label = t.speedMode?.let { MODE_NAMES.getOrNull(it) }?.takeIf { connected },
-            )
-        }
         Text(
-            "Dotknij licznika – tryb HUD", color = Ui.Muted, fontSize = 12.sp,
-            modifier = Modifier.align(Alignment.CenterHorizontally).offset(y = (-8).dp),
+            if (riding) "Dotknij licznika – tryb HUD" else "Licznik pojawi się, gdy ruszysz · dotknij – HUD",
+            color = Ui.Muted, fontSize = 12.sp,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
         )
 
         // ---------- szybkie akcje (jak Centrum sterowania) ----------
@@ -194,7 +200,14 @@ fun DashboardScreen() {
                         t.voltage?.let { Text("${f1(it)} V", color = Ui.Muted, fontSize = 13.sp) }
                         t.powerW?.let { Text("${f0(it)} W", color = Ui.Muted, fontSize = 13.sp) }
                     }
-                    if (t.charging) Text("⚡ Ładowanie", color = Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (t.charging) {
+                        // ładowarka W9: 54,6 V 1,5 A → pełne ładowanie ok. 7 h (instrukcja: 6–8 h)
+                        val min = ((100 - t.batteryPct).coerceAtLeast(0) / 100.0 * 7 * 60).toInt()
+                        Text(
+                            "⚡ Ładowanie · pełna za ~${min / 60} h ${min % 60} min",
+                            color = Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     if (t.lowPower) Text("Niski poziom baterii", color = Ui.Danger, fontSize = 13.sp)
                 }
             }
@@ -210,7 +223,7 @@ fun DashboardScreen() {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Trasa", t.tripKm?.let { "${f1(Ui.dist(it))} ${Ui.distUnit}" } ?: "–", Modifier.weight(1f))
                 Stat("Przebieg", t.odometerKm?.let { "${f0(Ui.dist(it))} ${Ui.distUnit}" } ?: "–", Modifier.weight(1f))
-                Stat("KERS", t.kersLevel?.let { KERS_NAMES.getOrElse(it) { "$it" }.take(6) } ?: "–", Modifier.weight(1f))
+                Stat("Tryb", t.speedMode?.let { MODE_NAMES.getOrNull(it) } ?: "–", Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("Moc", t.powerW?.let { "${f0(it)} W" } ?: "–", Modifier.weight(1f), Ui.Accent)
