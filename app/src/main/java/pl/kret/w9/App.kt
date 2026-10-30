@@ -34,11 +34,43 @@ class App : Application() {
         autoLight = AutoLight(this, scooter, prefs)
         autoLight.update()
         startAutoRecord()
+        watchParking()
     }
 
     private val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
     private var autoStarted = false
     private var stillSince = 0L
+
+    /** Zapisuje miejsce parkowania, gdy połączenie z hulajnogą się kończy. */
+    private fun watchParking() {
+        appScope.launch {
+            var wasConnected = false
+            scooter.state.collect { st ->
+                val c = st == pl.kret.w9.ble.ConnState.CONNECTED
+                if (wasConnected && !c) saveParkingNow()
+                wasConnected = c
+            }
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    fun saveParkingNow(): Boolean {
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return false
+        val lm = getSystemService(android.location.LocationManager::class.java) ?: return false
+        val loc = listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)
+            .mapNotNull { p -> try { lm.getLastKnownLocation(p) } catch (_: Exception) { null } }
+            .maxByOrNull { it.time } ?: return false
+        prefs.parkLat = loc.latitude
+        prefs.parkLon = loc.longitude
+        prefs.parkTime = System.currentTimeMillis()
+        parkingVersion.value++
+        return true
+    }
+
+    /** Zmienia się po każdym zapisie parkingu – ekran się odświeża. */
+    val parkingVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     /** Auto-nagrywanie: start gdy jedziesz > 5 km/h, koniec po 3 min postoju. */
     private fun startAutoRecord() {
@@ -129,6 +161,20 @@ class Prefs(ctx: Context) {
     /** km (łączny przebieg) przy ostatnim wykonaniu czynności serwisowej. */
     fun serviceDoneAt(key: String): Double = sp.getFloat("svc_$key", 0f).toDouble()
     fun setServiceDone(key: String, km: Double) = sp.edit().putFloat("svc_$key", km.toFloat()).apply()
+
+    /** Ostatnie miejsce parkowania (zapisane przy rozłączeniu z hulajnogą). */
+    var parkLat: Double
+        get() = sp.getString("parkLat", "")?.toDoubleOrNull() ?: Double.NaN
+        set(v) = sp.edit().putString("parkLat", v.toString()).apply()
+    var parkLon: Double
+        get() = sp.getString("parkLon", "")?.toDoubleOrNull() ?: Double.NaN
+        set(v) = sp.edit().putString("parkLon", v.toString()).apply()
+    var parkTime: Long
+        get() = sp.getLong("parkTime", 0L)
+        set(v) = sp.edit().putLong("parkTime", v).apply()
+    var priceKwh: Float
+        get() = sp.getFloat("priceKwh", 1.10f)
+        set(v) = sp.edit().putFloat("priceKwh", v).apply()
 
     var theftAlarm: Boolean
         get() = sp.getBoolean("theftAlarm", false)

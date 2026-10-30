@@ -200,14 +200,6 @@ fun DashboardScreen() {
                         t.voltage?.let { Text("${f1(it)} V", color = Ui.Muted, fontSize = 13.sp) }
                         t.powerW?.let { Text("${f0(it)} W", color = Ui.Muted, fontSize = 13.sp) }
                     }
-                    if (t.charging) {
-                        // ładowarka W9: 54,6 V 1,5 A → pełne ładowanie ok. 7 h (instrukcja: 6–8 h)
-                        val min = ((100 - t.batteryPct).coerceAtLeast(0) / 100.0 * 7 * 60).toInt()
-                        Text(
-                            "⚡ Ładowanie · pełna za ~${min / 60} h ${min % 60} min",
-                            color = Ui.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        )
-                    }
                     if (t.lowPower) Text("Niski poziom baterii", color = Ui.Danger, fontSize = 13.sp)
                 }
             }

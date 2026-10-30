@@ -77,6 +77,10 @@ fun TripsScreen() {
                 }
             }
         }
+        item { RangeCheckPanel() }
+        item { ParkingPanel() }
+        item { RecordsPanel(trips) }
+        item { CostPanel(trips.sumOf { it.distanceM } / 1000) }
         if (recording && live.points.size > 1) {
             item {
                 Panel(title = "Trwa nagrywanie • ${f1(Ui.dist(live.distanceM / 1000))} ${Ui.distUnit}") {
@@ -192,6 +196,14 @@ fun RouteMap(points: List<TripPoint>, modifier: Modifier = Modifier) {
                     val box = BoundingBox.fromGeoPointsSafe(geo)
                     map.post { map.zoomToBoundingBox(box.increaseByScale(1.3f), false) }
                 } else {
+                    // jeden punkt (np. parking) – pinezka
+                    val m = org.osmdroid.views.overlay.Marker(map).apply {
+                        position = geo.first()
+                        setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER, org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM)
+                        title = "Hulajnoga"
+                    }
+                    map.overlays.add(m)
+                    map.controller.setZoom(17.0)
                     map.controller.setCenter(geo.first())
                 }
             }
