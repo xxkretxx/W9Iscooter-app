@@ -407,8 +407,8 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
         // ruch zablokowanej hulajnogi = próba kradzieży
         if (t.speedKmh > 0.5 && !_alarm.value) {
             _alarm.value = true
-            Siren.maxVolume(ctx.getSystemService(android.media.AudioManager::class.java))
-            Siren.start()
+            pl.kret.w9.Siren.maxVolume(ctx.getSystemService(android.media.AudioManager::class.java))
+            pl.kret.w9.Siren.start()
             val vib = ctx.getSystemService(Vibrator::class.java)
             vib?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 400, 150, 400, 150, 400), 0))
             pl.kret.w9.Notifications.show(ctx, 99, "Alarm!", "Ktoś rusza Twoją zablokowaną hulajnogą.")
@@ -418,7 +418,7 @@ class ScooterManager(private val ctx: Context, private val prefs: Prefs) {
     fun stopAlarm() {
         _alarm.value = false
         theftArmedAt = System.currentTimeMillis()
-        Siren.stop()
+        pl.kret.w9.Siren.stop()
         ctx.getSystemService(Vibrator::class.java)?.cancel()
     }
 
